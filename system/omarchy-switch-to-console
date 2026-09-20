@@ -1,0 +1,283 @@
+#!/usr/bin/env bash
+# Narrow privileged boundary: validate one active Desk user, arm one volatile
+# Console request, and supervise the return. No caller-supplied command or path.
+set -euo pipefail
+export PATH=/usr/local/bin:/usr/bin:/bin
+umask 077
+
+readonly STOCK_DESKTOP=/usr/local/share/wayland-sessions/omarchy.desktop
+readonly CONSOLE_DESKTOP=/usr/local/share/wayland-sessions/omarchy-console.desktop
+readonly AUTOLOGIN=/etc/sddm.conf.d/autologin.conf
+readonly ROUTE=/etc/sddm.conf.d/zz-omarchy-console-oneshot.conf
+readonly RUNTIME_DIR=/run/omarchy-gaming-console
+readonly PAYLOAD=$RUNTIME_DIR/sddm-oneshot.conf
+readonly LOCK=/run/lock/omarchy-gaming-console-switch.lock
+readonly UNIT=omarchy-gaming-console-switch.service
+readonly SELF=/usr/local/libexec/omarchy-switch-to-console
+
+log() { /usr/bin/logger -t omarchy-gaming-console-switch -- "$*"; printf '%s\n' "$*"; }
+die() { log "REFUSE: $*" >&2; exit 78; }
+restart_sddm() {
+  systemctl reset-failed sddm >/dev/null 2>&1 || true
+  systemctl restart sddm
+}
+
+disarm_payload() {
+  /usr/bin/rm -f -- "$PAYLOAD"
+  /usr/bin/rmdir -- "$RUNTIME_DIR" 2>/dev/null || true
+}
+
+owned_root_file() {
+  local path=$1 mode owner
+  [[ -f $path && ! -L $path ]] || return 1
+  owner=$(/usr/bin/stat -c '%u:%g' "$path")
+  mode=$(/usr/bin/stat -c '%a' "$path")
+  [[ $owner == 0:0 ]] || return 1
+  (( (8#$mode & 8#022) == 0 ))
+}
+
+ini_values() {
+  local file=$1 wanted=$2
+  /usr/bin/awk -F= -v wanted="$wanted" '
+    /^[[:space:]]*\[/ {
+      section=$0
+      gsub(/[[:space:]]/, "", section)
+      next
+    }
+    section == "[Autologin]" {
+      key=$1
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+      if (key == wanted) {
+        value=substr($0, index($0, "=") + 1)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        print value
+      }
+    }
+  ' "$file"
+}
+
+single_ini_value() {
+  local file=$1 key=$2 values count
+  values=$(ini_values "$file" "$key")
+  count=$(printf '%s\n' "$values" | /usr/bin/awk 'NF { n++ } END { print n+0 }')
+  [[ $count == 1 ]] || return 1
+  printf '%s\n' "$values"
+}
+
+active_seat_session() {
+  local expected_uid=$1 expected_user=$2 expected_desktop=$3 sid
+  while read -r sid _; do
+    [[ -n $sid ]] || continue
+    [[ $(loginctl show-session "$sid" -p User --value 2>/dev/null) == "$expected_uid" ]] || continue
+    [[ $(loginctl show-session "$sid" -p Name --value 2>/dev/null) == "$expected_user" ]] || continue
+    [[ $(loginctl show-session "$sid" -p Seat --value 2>/dev/null) == seat0 ]] || continue
+    [[ $(loginctl show-session "$sid" -p Remote --value 2>/dev/null) == no ]] || continue
+    [[ $(loginctl show-session "$sid" -p Class --value 2>/dev/null) == user ]] || continue
+    [[ $(loginctl show-session "$sid" -p State --value 2>/dev/null) == active ]] || continue
+    [[ $(loginctl show-session "$sid" -p Service --value 2>/dev/null) == sddm-autologin ]] || continue
+    [[ $(loginctl show-session "$sid" -p Desktop --value 2>/dev/null) == "$expected_desktop" ]] || continue
+    printf '%s\n' "$sid"
+    return 0
+  done < <(loginctl list-sessions --no-legend --no-pager)
+  return 1
+}
+
+session_has_expected_compositor() {
+  local sid=$1 scope cgroup expected file pid exe
+  scope=$(loginctl show-session "$sid" -p Scope --value 2>/dev/null)
+  [[ -n $scope ]] || return 1
+  cgroup=$(systemctl show "$scope" -p ControlGroup --value 2>/dev/null)
+  [[ -n $cgroup && -d /sys/fs/cgroup$cgroup ]] || return 1
+  if [[ $(systemd-detect-virt 2>/dev/null || true) == qemu && $(hostnamectl --static 2>/dev/null || true) == omarchy-vm ]]; then
+    expected=/usr/bin/Hyprland
+  else
+    expected=/usr/bin/gamescope
+  fi
+  shopt -s nullglob globstar
+  for file in /sys/fs/cgroup"$cgroup"/cgroup.procs /sys/fs/cgroup"$cgroup"/**/cgroup.procs; do
+    while read -r pid; do
+      [[ $pid =~ ^[1-9][0-9]*$ ]] || continue
+      exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
+      [[ $exe == "$expected" ]] && return 0
+    done <"$file"
+  done
+  return 1
+}
+
+check_conflicts() {
+  local file name
+  shopt -s nullglob nocaseglob
+  for file in /etc/sddm.conf.d/*; do
+    [[ $file == "$AUTOLOGIN" || $file == "$ROUTE" ]] && continue
+    name=${file##*/}
+    [[ $name != *deckshift* && $name != *wopr* ]] || die "conflicting SDDM drop-in: $file"
+    if [[ -f $file ]] && { ini_values "$file" Session | /usr/bin/awk 'NF { found=1 } END { exit !found }'; }; then
+      die "another SDDM drop-in overrides Autologin Session: $file"
+    fi
+  done
+  if [[ -f /etc/sddm.conf ]] && { ini_values /etc/sddm.conf Session | /usr/bin/awk 'NF { found=1 } END { exit !found }'; }; then
+    die '/etc/sddm.conf overrides Autologin Session'
+  fi
+  for file in /usr/local/share/wayland-sessions/*deckshift* /usr/local/share/wayland-sessions/*wopr* /usr/share/wayland-sessions/*deckshift* /usr/share/wayland-sessions/*wopr*; do
+    [[ -e $file ]] && die "conflicting session product: $file"
+  done
+  shopt -u nocaseglob
+}
+
+validate_baseline() {
+  local expected_uid=$1 expected_user=$2 session user
+  owned_root_file "$STOCK_DESKTOP" || die "stock omarchy.desktop is missing or unsafe"
+  /usr/bin/grep -Eq '^Exec=.*\buwsm\b' "$STOCK_DESKTOP" || die 'stock omarchy.desktop does not launch uwsm'
+  owned_root_file "$AUTOLOGIN" || die "autologin.conf is missing or unsafe"
+  session=$(single_ini_value "$AUTOLOGIN" Session) || die 'autologin Session must appear exactly once'
+  user=$(single_ini_value "$AUTOLOGIN" User) || die 'autologin User must appear exactly once'
+  [[ $session == omarchy.desktop ]] || die "autologin Session is not omarchy.desktop"
+  [[ $user == "$expected_user" ]] || die 'caller is not the stock autologin user'
+  [[ $(id -u "$user" 2>/dev/null) == "$expected_uid" ]] || die 'autologin user/uid mismatch'
+  owned_root_file "$CONSOLE_DESKTOP" || die 'Console desktop entry is missing or unsafe'
+  owned_root_file /usr/local/bin/omarchy-console-session || die 'Console session wrapper is missing or unsafe'
+  [[ -x /usr/local/bin/omarchy-console-session ]] || die 'Console session wrapper is not executable'
+  [[ $(single_ini_value "$CONSOLE_DESKTOP" DesktopNames 2>/dev/null || true) == gamescope ]] || {
+    /usr/bin/grep -Fxq 'DesktopNames=gamescope' "$CONSOLE_DESKTOP" || die 'Console desktop identity is not gamescope'
+  }
+  /usr/bin/grep -Fxq 'Name=Gamescope Console' "$CONSOLE_DESKTOP" || die 'unexpected Console session name'
+  ! /usr/bin/grep -Eiq '^Name=.*uwsm' "$CONSOLE_DESKTOP" || die 'Console session Name contains uwsm'
+  [[ -L $ROUTE && $(readlink "$ROUTE") == "$PAYLOAD" ]] || die 'volatile SDDM route is missing or changed'
+  [[ $(/usr/bin/stat -c '%u:%g' "$ROUTE") == 0:0 ]] || die 'volatile SDDM route is not root-owned'
+  check_conflicts
+}
+
+write_payload() {
+  local user=$1 temp
+  [[ ! -e $RUNTIME_DIR && ! -L $RUNTIME_DIR ]] || {
+    [[ -d $RUNTIME_DIR && ! -L $RUNTIME_DIR ]] || die 'runtime path is not a real directory'
+    [[ $(/usr/bin/stat -c '%u:%g:%a' "$RUNTIME_DIR") == 0:0:700 ]] || die 'runtime directory ownership/mode is unsafe'
+  }
+  /usr/bin/install -d -m 0700 -o root -g root "$RUNTIME_DIR"
+  [[ ! -e $PAYLOAD && ! -L $PAYLOAD ]] || die 'a Console request is already armed'
+  temp=$RUNTIME_DIR/.sddm-oneshot.conf.$$
+  printf '[Autologin]\nUser=%s\nSession=omarchy-console.desktop\nRelogin=false\n' "$user" >"$temp"
+  /usr/bin/chown root:root "$temp"
+  /usr/bin/chmod 0600 "$temp"
+  /usr/bin/mv -f "$temp" "$PAYLOAD"
+}
+
+payload_is_exact() {
+  local expected_user=$1
+  [[ -f $PAYLOAD && ! -L $PAYLOAD ]] || return 1
+  [[ $(/usr/bin/stat -c '%u:%g:%a' "$PAYLOAD") == 0:0:600 ]] || return 1
+  [[ $(single_ini_value "$PAYLOAD" User) == "$expected_user" ]] || return 1
+  [[ $(single_ini_value "$PAYLOAD" Session) == omarchy-console.desktop ]] || return 1
+  [[ $(single_ini_value "$PAYLOAD" Relogin) == false ]] || return 1
+}
+
+wait_for_console() {
+  local uid=$1 user=$2 sid
+  for ((i=0; i<300; i++)); do
+    sid=$(active_seat_session "$uid" "$user" gamescope 2>/dev/null || true)
+    if [[ -n $sid ]] && session_has_expected_compositor "$sid"; then
+      printf '%s\n' "$sid"
+      return 0
+    fi
+    /usr/bin/sleep 0.1
+  done
+  return 1
+}
+
+wait_for_stock() {
+  local uid=$1 user=$2 sid
+  for ((i=0; i<120; i++)); do
+    sid=$(active_seat_session "$uid" "$user" '' 2>/dev/null || true)
+    [[ -n $sid ]] && { printf '%s\n' "$sid"; return 0; }
+    /usr/bin/sleep 0.5
+  done
+  return 1
+}
+
+supervise() {
+  local uid=$1 user=$2 sid='' stock_sid=''
+  [[ $EUID == 0 ]] || die 'supervisor is not root'
+  [[ -n ${INVOCATION_ID:-} && -z ${PKEXEC_UID:-} ]] || die 'internal supervisor must run as a systemd service'
+  exec 9>"$LOCK"
+  /usr/bin/flock -x 9
+  SUPERVISOR_PID=$BASHPID
+  SUPERVISOR_RECOVERY=1
+  cleanup() {
+    local rc=$?
+    [[ $BASHPID == "$SUPERVISOR_PID" ]] || return "$rc"
+    trap - EXIT TERM INT HUP
+    disarm_payload
+    if (( SUPERVISOR_RECOVERY )); then
+      log "supervisor recovery after exit $rc"
+      restart_sddm || true
+    fi
+    exit "$rc"
+  }
+  trap cleanup EXIT TERM INT HUP
+  validate_baseline "$uid" "$user"
+
+  sid=$(active_seat_session "$uid" "$user" gamescope 2>/dev/null || true)
+  if [[ -n $sid ]] && ! session_has_expected_compositor "$sid"; then
+    die 'Console-labelled session has no expected compositor'
+  fi
+  if [[ -z $sid ]]; then
+    payload_is_exact "$user" || die 'volatile payload is missing or changed'
+    log 'restarting SDDM for one Console visit'
+    restart_sddm
+    sid=$(wait_for_console "$uid" "$user") || die 'Console did not become active within 30 seconds'
+  fi
+
+  disarm_payload
+  log "consumed volatile request for Console session $sid"
+  while [[ -n $(loginctl show-session "$sid" -p State --value 2>/dev/null || true) ]]; do
+    /usr/bin/sleep 0.5
+  done
+  log "Console session $sid ended; restarting SDDM for stock Omarchy"
+  restart_sddm
+  stock_sid=$(wait_for_stock "$uid" "$user") || die 'stock Omarchy did not return within 60 seconds'
+  SUPERVISOR_RECOVERY=0
+  trap - EXIT TERM INT HUP
+  log "stock Omarchy returned as session $stock_sid"
+}
+
+request_switch() {
+  local uid user sid
+  [[ $EUID == 0 ]] || die 'helper must be run through pkexec'
+  [[ ${PKEXEC_UID:-} =~ ^[1-9][0-9]*$ ]] || die 'missing authenticated pkexec caller'
+  uid=$PKEXEC_UID
+  user=$(getent passwd "$uid" | /usr/bin/awk -F: 'NR==1 { print $1 }')
+  [[ -n $user ]] || die 'pkexec caller has no local account'
+  sid=$(active_seat_session "$uid" "$user" '') || die 'caller is not the active local stock Omarchy seat user'
+  exec 9>"$LOCK"
+  /usr/bin/flock -n -x 9 || die 'another Console transition is in progress'
+  validate_baseline "$uid" "$user"
+  [[ ! -e $PAYLOAD && ! -L $PAYLOAD ]] || die 'a Console request is already armed'
+  ! systemctl is-active --quiet "$UNIT" || die 'Console supervisor is already active'
+  write_payload "$user"
+  if ! systemd-run --quiet --collect --unit=omarchy-gaming-console-switch \
+      --property=Type=exec \
+      --property=Restart=on-abnormal \
+      --property=RestartSec=1s \
+      --property=StartLimitIntervalSec=60s \
+      --property=StartLimitBurst=3 \
+      --property=TimeoutStopSec=15s \
+      "$SELF" --supervise "$uid" "$user"; then
+    disarm_payload
+    die 'could not start the Console supervisor'
+  fi
+  log "accepted one Console visit from active session $sid"
+}
+
+case ${1-} in
+  '')
+    [[ $# == 0 ]] || die 'unexpected arguments'
+    request_switch
+    ;;
+  --supervise)
+    [[ $# == 3 && $2 =~ ^[1-9][0-9]*$ && $3 =~ ^[a-z_][a-z0-9_-]*$ ]] || die 'invalid internal supervisor arguments'
+    supervise "$2" "$3"
+    ;;
+  *)
+    die 'unexpected arguments'
+    ;;
+esac

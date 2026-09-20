@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Gamescope Console
+Comment=Controller-first Steam session for Omarchy Gaming Console
+Exec=/usr/local/bin/omarchy-console-session
+TryExec=/usr/local/bin/omarchy-console-session
+Type=Application
+DesktopNames=gamescope

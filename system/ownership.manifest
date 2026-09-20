@@ -1,0 +1,10 @@
+# type	source	destination	mode	owner	group	link_target
+file	omarchy-console-session	/usr/local/bin/omarchy-console-session	0755	root	root	-
+file	steamos-session-select	/usr/local/bin/steamos-session-select	0755	root	root	-
+file	steamos-update	/usr/local/bin/steamos-update	0755	root	root	-
+file	steamos-update	/usr/bin/steamos-polkit-helpers/steamos-update	0755	root	root	-
+file	steamos-select-branch	/usr/local/bin/steamos-select-branch	0755	root	root	-
+file	omarchy-switch-to-console	/usr/local/libexec/omarchy-switch-to-console	0755	root	root	-
+file	omarchy-console.desktop	/usr/local/share/wayland-sessions/omarchy-console.desktop	0644	root	root	-
+file	org.omarchy.gaming-console.policy	/usr/share/polkit-1/actions/org.omarchy.gaming-console.policy	0644	root	root	-
+symlink	-	/etc/sddm.conf.d/zz-omarchy-console-oneshot.conf	0777	root	root	/run/omarchy-gaming-console/sddm-oneshot.conf

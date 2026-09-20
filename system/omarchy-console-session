@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# Session boundary for Omarchy Gaming Console.
+set -euo pipefail
+export PATH=/usr/local/bin:/usr/bin:/bin
+
+unset DISPLAY WAYLAND_DISPLAY XDG_DESKTOP_PORTAL_DIR HYPRLAND_INSTANCE_SIGNATURE
+export XDG_SESSION_TYPE=wayland
+
+is_try_omarchy_vm() {
+  [[ $(/usr/bin/systemd-detect-virt 2>/dev/null || true) == qemu ]] &&
+    [[ $(/usr/bin/hostnamectl --static 2>/dev/null || true) == omarchy-vm ]]
+}
+
+run_dummy() {
+  is_try_omarchy_vm || {
+    printf 'Refusing dummy Console outside the disposable Try Omarchy VM.\n' >&2
+    exit 78
+  }
+  [[ -x /usr/bin/Hyprland && -x /usr/bin/foot ]] || {
+    printf 'Dummy Console requires Hyprland and foot.\n' >&2
+    exit 69
+  }
+  : "${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is required}"
+  local runtime runner config
+  runtime=$XDG_RUNTIME_DIR/omarchy-gaming-console
+  /usr/bin/install -d -m 0700 "$runtime"
+  runner=$runtime/dummy-return
+  config=$runtime/dummy.lua
+  cat >"$runner" <<'RUNNER'
+#!/usr/bin/env bash
+set -euo pipefail
+/usr/bin/sleep 6
+exec /usr/local/bin/steamos-session-select plasma gamescope vm-dummy-return
+RUNNER
+  /usr/bin/chmod 0700 "$runner"
+  printf '%s\n' \
+    '-- VM-only isolated compositor. It never imports stock Omarchy config.' \
+    'hl.on("hyprland.start", function()' \
+    "  hl.exec_cmd(\"/usr/bin/foot --title=ogc-dummy-console $runner\")" \
+    'end)' >"$config"
+  /usr/bin/chmod 0600 "$config"
+  export OGC_DUMMY=1
+  export OGC_DUMMY_SESSION_PID=$$
+  /usr/bin/logger -t omarchy-gaming-console "dummy-session-start pid=$$ session=${XDG_SESSION_ID:-unknown}"
+  exec /usr/bin/Hyprland --config "$config"
+}
+
+# The repository desktop entry has no test flag. Only the exact disposable VM
+# fixture auto-selects dummy mode; an explicit dummy request is also VM-gated.
+if [[ ${OGC_DUMMY:-0} == 1 ]] || is_try_omarchy_vm; then
+  run_dummy
+fi
+
+# DRM primary-node numbering is not stable: a single GPU can be card1.
+# Require a real primary character device; let Gamescope choose its GPU.
+has_drm_card() {
+  local card
+  for card in /dev/dri/card[0-9]*; do
+    [[ -c $card ]] && return 0
+  done
+  return 1
+}
+
+has_drm_card || {
+  printf 'No DRM card is available; refusing to fake a Console session.\n' >&2
+  exit 69
+}
+[[ -x /usr/bin/gamescope && -x /usr/bin/steam && -x /usr/bin/mangoapp ]] || {
+  printf 'gamescope, Steam, and MangoHud/mangoapp are required for the hardware Console session.\n' >&2
+  exit 69
+}
+
+# Optional user data only: one line containing width height refresh (integers).
+# Never source a shell config or accept arbitrary Gamescope arguments.
+mode_file=${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-gaming-console/display-mode
+display_mode=
+read_display_mode() {
+  local extra mode_pattern='^([1-9][0-9]{2,4}) ([1-9][0-9]{2,4}) ([1-9][0-9]{1,3})$'
+  [[ -f $mode_file && ! -L $mode_file ]] || return 1
+  {
+    IFS= read -r -n 128 display_mode || [[ -n $display_mode ]] || return 1
+    if IFS= read -r -n 1 extra; then return 1; fi
+    [[ -z $extra ]] || return 1
+  } < "$mode_file"
+  [[ $display_mode =~ $mode_pattern ]] || return 1
+  width=${BASH_REMATCH[1]}
+  height=${BASH_REMATCH[2]}
+  refresh=${BASH_REMATCH[3]}
+  (( width >= 320 && width <= 16384 && height >= 200 && height <= 16384 && refresh >= 24 && refresh <= 1000 ))
+}
+if [[ -e $mode_file || -L $mode_file ]]; then
+  read_display_mode || {
+    printf 'Invalid Console display-mode preference; expected width height refresh.\n' >&2
+    exit 78
+  }
+fi
+
+# Steam exposes native output-mode controls only with a mode-save path.
+# This is unprivileged user preference data, preserved by engine uninstall.
+mode_dir=${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-gaming-console
+[[ ! -L $mode_dir && ( ! -e $mode_dir || ( -d $mode_dir && -O $mode_dir ) ) ]] || {
+  printf 'Unsafe Console mode-save directory; refusing to launch.\n' >&2
+  exit 78
+}
+(umask 077; mkdir -p -- "$mode_dir")
+export GAMESCOPE_MODE_SAVE_FILE=$mode_dir/modes.cfg
+if [[ -e $GAMESCOPE_MODE_SAVE_FILE || -L $GAMESCOPE_MODE_SAVE_FILE ]]; then
+  [[ -f $GAMESCOPE_MODE_SAVE_FILE && ! -L $GAMESCOPE_MODE_SAVE_FILE && -O $GAMESCOPE_MODE_SAVE_FILE && -w $GAMESCOPE_MODE_SAVE_FILE ]] || {
+    printf 'Unsafe Console mode-save file; refusing to launch.\n' >&2
+    exit 78
+  }
+else
+  (umask 077; set -o noclobber; : > "$GAMESCOPE_MODE_SAVE_FILE")
+fi
+
+# A portal started by Steam can outlive this graphical session on the user bus.
+# Stop it before logind sees Console end, so the next desktop activates a fresh
+# portal with its own imported environment. Do not modify that environment here.
+cleanup_console_portal() {
+  local result=$?
+  trap - EXIT
+  /usr/bin/systemctl --user stop xdg-desktop-portal.service || {
+    /usr/bin/logger -t omarchy-gaming-console 'Could not stop the Console portal during teardown.' || true
+  }
+  exit "$result"
+}
+trap cleanup_console_portal EXIT
+
+if [[ -n $display_mode ]]; then
+  /usr/bin/gamescope --steam --mangoapp --xwayland-count 2 -W "$width" -H "$height" -r "$refresh" -- \
+    /usr/bin/steam -gamepadui -steamos3
+else
+  /usr/bin/gamescope --steam --mangoapp --xwayland-count 2 -- \
+    /usr/bin/steam -gamepadui -steamos3
+fi

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.jcarcinogen.gaming-console",
+  "name": "Omarchy Gaming Console",
+  "version": "0.1.0",
+  "author": "Scott Angel",
+  "license": "MIT",
+  "description": "Give your Omarchy computer a Steam Box-like experience: launch a TV-friendly, controller-focused Steam session in exclusive Gamescope from a controller icon, then return to your normal desktop. Includes native display controls and a performance overlay. System-engine setup requires explicit local authorization; Omarchy remains your normal boot destination.",
+  "kinds": [
+    "bar-widget",
+    "overlay",
+    "service"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "barWidget": "BarWidget.qml",
+    "overlay": "Overlay.qml",
+    "service": "Service.qml"
+  },
+  "barWidget": {
+    "defaultSection": "right"
+  }
+}

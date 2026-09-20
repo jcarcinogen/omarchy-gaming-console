@@ -1,0 +1,299 @@
+#!/usr/bin/env bash
+# Disposable Try Omarchy VM-only updater-helper migration and fault harness.
+# Staged for later execution; never run against a non-disposable installation.
+set -euo pipefail
+export PATH=/usr/local/bin:/usr/bin:/bin
+[[ $EUID == 0 && $(systemd-detect-virt) == qemu && $(hostnamectl --static) == omarchy-vm ]] || exit 78
+[[ ${OGC_CONFIRMED_DISPOSABLE_UPDATER_FIXTURE:-} == YES ]] || {
+  printf 'Set OGC_CONFIRMED_DISPOSABLE_UPDATER_FIXTURE=YES only on the disposable updater fixture.\n' >&2
+  exit 78
+}
+
+readonly SOURCE=${1:-/tmp/ogc-updater-source}
+readonly INSTALLER=$SOURCE/system/install.sh
+readonly UNINSTALLER=$SOURCE/system/uninstall.sh
+readonly CLI=$SOURCE/bin/omarchy-gaming-console
+readonly MANIFEST=$SOURCE/system/ownership.manifest
+readonly STATE_DIR=/var/lib/omarchy-gaming-console
+readonly STATE=$STATE_DIR/install-state.tsv
+readonly UPDATER_DIR=/usr/bin/steamos-polkit-helpers
+readonly HELPER=$UPDATER_DIR/steamos-update
+readonly ROUTE=/etc/sddm.conf.d/zz-omarchy-console-oneshot.conf
+readonly PAYLOAD=/run/omarchy-gaming-console/sddm-oneshot.conf
+readonly PREDECESSOR_HASH=9a13ce7b40b09ce48046a30d262b6cb9df72eac8fa7cff42695a3a43d8beb14f
+readonly STOCK_DESKTOP=/usr/local/share/wayland-sessions/omarchy.desktop
+readonly AUTOLOGIN=/etc/sddm.conf.d/autologin.conf
+readonly WORK=/tmp/ogc-updater-verified-fixture
+[[ -x $INSTALLER && -x $UNINSTALLER && -x $CLI && -f $MANIFEST ]]
+command -v runuser >/dev/null
+
+rm -rf -- "$WORK"
+install -d -m 0700 -o root -g root "$WORK"
+stock_before=$(sha256sum "$STOCK_DESKTOP" "$AUTOLOGIN")
+
+legacy_state() {
+  install -d -m 0700 -o root -g root "$STATE_DIR"
+  cat >"$STATE" <<EOF
+state_version	1
+project_version	0.0.0
+manifest_sha256	$PREDECESSOR_HASH
+object	file	/usr/local/bin/omarchy-console-session	0755	root	root	fe73f4f816bb139391ebdf6ddb0fc3bca7d374ed115de8b485b756364c2bf5b7
+object	file	/usr/local/bin/steamos-session-select	0755	root	root	039894329a382dd6f11007faf73971dd53da8d498be853718a772c97ea03c460
+object	file	/usr/local/bin/steamos-update	0755	root	root	ffec208fbc702284884f2e26095b8d49b9c98455c8bf1e3b7fc7049701c26741
+object	file	/usr/local/bin/steamos-select-branch	0755	root	root	ac2852f2bb8b67b84fa506133ab0184d9091d521fabc0f18235be1a1e98befdd
+object	file	/usr/local/libexec/omarchy-switch-to-console	0755	root	root	1c3b62baea3870f40945783064f4c561799a5fc8762a05acc68226418a8c6e0b
+object	file	/usr/local/share/wayland-sessions/omarchy-console.desktop	0644	root	root	c46c565a65dc338062466b722a7505bdb0959fcc05d24f36b21023a6d7907bd8
+object	file	/usr/share/polkit-1/actions/org.omarchy.gaming-console.policy	0644	root	root	ecf940f89b352ec38776096abcc2281f896a6a19ac9e8cdc2b02ab99c7844bcf
+object	symlink	$ROUTE	0777	root	root	$PAYLOAD
+EOF
+  chown root:root "$STATE"
+  chmod 0600 "$STATE"
+}
+
+legacy_objects() {
+  install -m 0755 -o root -g root "$SOURCE/system/omarchy-console-session" /usr/local/bin/omarchy-console-session
+  install -m 0755 -o root -g root "$SOURCE/system/steamos-session-select" /usr/local/bin/steamos-session-select
+  install -m 0755 -o root -g root "$SOURCE/system/steamos-update" /usr/local/bin/steamos-update
+  install -m 0755 -o root -g root "$SOURCE/system/steamos-select-branch" /usr/local/bin/steamos-select-branch
+  install -D -m 0755 -o root -g root "$SOURCE/system/omarchy-switch-to-console" /usr/local/libexec/omarchy-switch-to-console
+  install -m 0644 -o root -g root "$SOURCE/system/omarchy-console.desktop" /usr/local/share/wayland-sessions/omarchy-console.desktop
+  install -m 0644 -o root -g root "$SOURCE/system/org.omarchy.gaming-console.policy" /usr/share/polkit-1/actions/org.omarchy.gaming-console.policy
+  rm -f -- "$ROUTE"
+  ln -s -- "$PAYLOAD" "$ROUTE"
+  chown -h root:root "$ROUTE"
+  legacy_state
+}
+
+expect_refusal() {
+  local installer=${1:-$INSTALLER} output rc
+  set +e
+  output=$($installer repair 2>&1)
+  rc=$?
+  set -e
+  [[ $rc == 78 ]] || { printf 'Expected refusal, got rc=%s: %s\n' "$rc" "$output" >&2; exit 1; }
+}
+
+make_fault_source() {
+  local name=$1 mode=$2 destination
+  destination=$WORK/$name
+  cp -a -- "$SOURCE" "$destination"
+  python3 - "$destination/system/install.sh" "$mode" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+mode = sys.argv[2]
+text = path.read_text()
+if mode == "before-helper":
+    old = "prepare_updater_directory\napply_manifest"
+    new = "exit 99\nprepare_updater_directory\napply_manifest"
+elif mode == "after-helper":
+    old = '        log "Installed: $destination"\n      fi'
+    new = '        log "Installed: $destination"\n        [[ $destination != "$UPDATER_HELPER" ]] || exit 99\n      fi'
+elif mode == "after-publication":
+    old = "[[ ! -e $PAYLOAD && ! -L $PAYLOAD ]] || die 'a volatile Console request is armed after setup'\nwrite_state"
+    new = old + "\nexit 99"
+else:
+    raise SystemExit("unknown fault mode")
+if text.count(old) != 1:
+    raise SystemExit(f"fault transform anchor count was {text.count(old)} for {mode}")
+path.write_text(text.replace(old, new))
+PY
+  printf '%s\n' "$destination"
+}
+
+run_expected_interrupt() {
+  local installer=$1 output=$2 rc
+  set +e
+  "$installer" repair >"$output.stdout" 2>"$output.stderr"
+  rc=$?
+  set -e
+  [[ $rc == 99 ]] || { printf 'Expected injected interruption rc=99, got %s\n' "$rc" >&2; exit 1; }
+}
+
+# Baseline cleanup uses only a valid recorded uninstall. Never remove a
+# preexisting shared directory to manufacture fixture ownership.
+if [[ -f $STATE && ! -L $STATE ]]; then "$UNINSTALLER"; fi
+[[ ! -e $HELPER && ! -L $HELPER && ! -e $UPDATER_DIR && ! -L $UPDATER_DIR ]] || {
+  printf 'Disposable fixture is not clean; refusing to alter preexisting shared updater paths.\n' >&2
+  exit 78
+}
+legacy_objects
+
+# Unknown, duplicate, and malformed v1 state fail before helper creation.
+sed -i "s/$PREDECESSOR_HASH/$(printf '0%.0s' {1..64})/" "$STATE"
+before=$(sha256sum "$STATE")
+expect_refusal
+[[ $(sha256sum "$STATE") == "$before" && ! -e $HELPER && ! -L $HELPER ]]
+printf 'UNKNOWN_STATE_REFUSAL_PASS\n'
+legacy_state
+duplicate=$(awk -F '\t' '$1=="object" {print; exit}' "$STATE")
+printf '%s\n' "$duplicate" >>"$STATE"
+expect_refusal
+[[ ! -e $HELPER && ! -L $HELPER ]]
+printf 'DUPLICATE_STATE_REFUSAL_PASS\n'
+legacy_state
+sed -i 's|object\tfile\t/usr/local/bin/omarchy-console-session\t0755|object\tfile\t/tmp/arbitrary\t0755|' "$STATE"
+expect_refusal
+[[ ! -e /tmp/arbitrary && ! -e $HELPER && ! -L $HELPER ]]
+printf 'MALFORMED_STATE_REFUSAL_PASS\n'
+
+# An unrecorded helper is never adopted, even when byte-identical.
+legacy_state
+install -d -m 0755 -o root -g root "$UPDATER_DIR"
+install -m 0755 -o root -g root "$SOURCE/system/steamos-update" "$HELPER"
+before=$(sha256sum "$HELPER")
+expect_refusal
+[[ $(sha256sum "$HELPER") == "$before" ]]
+printf 'PREEXISTING_HELPER_COLLISION_PASS\n'
+rm -f -- "$HELPER"
+rmdir -- "$UPDATER_DIR"
+
+# Symlinked shared-directory paths fail closed during install.
+mkdir "$WORK/symlink-target"
+ln -s "$WORK/symlink-target" "$UPDATER_DIR"
+expect_refusal
+[[ -L $UPDATER_DIR && ! -e "$WORK/symlink-target/steamos-update" ]]
+printf 'UNSAFE_DIRECTORY_REFUSAL_PASS\n'
+rm -- "$UPDATER_DIR"
+rmdir "$WORK/symlink-target"
+
+# Exact v1 migration, exact-path inert helper behavior, and genuine non-root status.
+legacy_state
+"$INSTALLER" repair
+[[ $(awk -F '\t' '$1=="state_version" {print $2}' "$STATE") == 2 ]]
+[[ $(awk -F '\t' '$1=="install_phase" {print $2}' "$STATE") == complete ]]
+[[ $(awk -F '\t' '$1=="object" {n++} END {print n+0}' "$STATE") == 9 ]]
+cmp -s "$SOURCE/system/steamos-update" /usr/local/bin/steamos-update
+cmp -s "$SOURCE/system/steamos-update" "$HELPER"
+for argument in NONE check update --anything; do
+  set +e
+  if [[ $argument == NONE ]]; then "$HELPER" >"$WORK/helper.stdout" 2>"$WORK/helper.stderr"; else "$HELPER" "$argument" >"$WORK/helper.stdout" 2>"$WORK/helper.stderr"; fi
+  rc=$?
+  set -e
+  [[ $rc == 7 && ! -s $WORK/helper.stdout && ! -s $WORK/helper.stderr ]]
+done
+printf 'EXACT_PATH_EXIT7_QUIET_PASS\nLEGACY_MIGRATION_PASS\n'
+desktop_user=$(awk -F= '/^[[:space:]]*User[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2; exit}' "$AUTOLOGIN")
+[[ -n $desktop_user && $(id -u "$desktop_user") != 0 ]]
+runuser -u "$desktop_user" -- test ! -r "$STATE"
+runuser -u "$desktop_user" -- "$CLI" status --json >"$WORK/nonroot-status.json"
+grep -Fq '"state":"ready"' "$WORK/nonroot-status.json"
+printf 'GENUINE_NONROOT_STATUS_PASS\n'
+before=$(sha256sum "$STATE" "$HELPER" /usr/local/bin/steamos-update)
+"$INSTALLER" repair
+after=$(sha256sum "$STATE" "$HELPER" /usr/local/bin/steamos-update)
+[[ $before == "$after" ]]
+printf 'IDEMPOTENT_REPAIR_PASS\n'
+"$UNINSTALLER"
+[[ ! -e $UPDATER_DIR && ! -L $UPDATER_DIR ]]
+printf 'PROJECT_DIRECTORY_REMOVED_PASS\n'
+
+# Existing directory metadata is preserved across install, repair, and uninstall.
+install -d -m 0700 -o root -g root "$UPDATER_DIR"
+legacy_objects
+"$INSTALLER" repair
+[[ $(stat -c '%u:%g:%a' "$UPDATER_DIR") == 0:0:700 ]]
+"$INSTALLER" repair
+[[ $(stat -c '%u:%g:%a' "$UPDATER_DIR") == 0:0:700 ]]
+"$UNINSTALLER"
+[[ -d $UPDATER_DIR && ! -L $UPDATER_DIR && $(stat -c '%a' "$UPDATER_DIR") == 700 ]]
+rmdir -- "$UPDATER_DIR"
+printf 'DIRECTORY_METADATA_DRIFT_PRESERVED_PASS\nSHARED_DIRECTORY_PRESERVED_PASS\n'
+
+# Modified/reowned/symlinked recorded helpers are preserved and repair refuses.
+legacy_objects
+"$INSTALLER" repair
+printf 'modified\n' >>"$HELPER"
+before=$(sha256sum "$HELPER")
+expect_refusal
+[[ $(sha256sum "$HELPER") == "$before" ]]
+"$UNINSTALLER"
+[[ -f $HELPER ]]
+printf 'MODIFIED_HELPER_PRESERVED_PASS\n'
+rm -f -- "$HELPER"
+rmdir -- "$UPDATER_DIR"
+legacy_objects
+"$INSTALLER" repair
+chown 1000:1000 "$HELPER"
+expect_refusal
+"$UNINSTALLER"
+[[ -f $HELPER && $(stat -c '%u:%g' "$HELPER") == 1000:1000 && -d $UPDATER_DIR ]]
+printf 'UNOWNED_HELPER_PRESERVED_PASS\n'
+rm -f -- "$HELPER"
+rmdir -- "$UPDATER_DIR"
+legacy_objects
+"$INSTALLER" repair
+rm -f -- "$HELPER"
+ln -s "$WORK/unknown-helper-target" "$HELPER"
+expect_refusal
+"$UNINSTALLER"
+[[ -L $HELPER ]]
+printf 'SYMLINKED_HELPER_PRESERVED_PASS\n'
+rm -- "$HELPER"
+rmdir -- "$UPDATER_DIR"
+
+# Uninstall validates the entire shared parent chain before touching the leaf.
+legacy_objects
+"$INSTALLER" repair
+mv -- "$UPDATER_DIR" "$WORK/replaced-parent-target"
+ln -s "$WORK/replaced-parent-target" "$UPDATER_DIR"
+"$UNINSTALLER"
+[[ -L $UPDATER_DIR && -f $WORK/replaced-parent-target/steamos-update ]]
+printf 'SYMLINKED_PARENT_UNINSTALL_PRESERVES_PASS\n'
+rm -- "$UPDATER_DIR"
+rm -f -- "$WORK/replaced-parent-target/steamos-update"
+rmdir -- "$WORK/replaced-parent-target"
+
+# Source-only upgrades authenticate old ownership structurally, preserve via the
+# recorded helper hash, publish the new hash, and remain uninstallable.
+legacy_objects
+"$INSTALLER" repair
+cp -a -- "$SOURCE" "$WORK/source-only"
+printf '\n# source-only lifecycle fixture\n' >>"$WORK/source-only/system/steamos-update"
+"$WORK/source-only/system/install.sh" repair
+new_hash=$(sha256sum "$WORK/source-only/system/steamos-update" | awk '{print $1}')
+[[ $(awk -F '\t' -v p="$HELPER" '$1=="object" && $3==p {print $7}' "$STATE") == "$new_hash" ]]
+"$WORK/source-only/system/uninstall.sh"
+[[ ! -e $HELPER && ! -L $HELPER ]]
+printf 'SOURCE_ONLY_UPGRADE_LIFECYCLE_PASS\n'
+
+# Fault boundaries use disposable source transforms, never a production env backdoor.
+legacy_objects
+fault=$(make_fault_source fault-before-helper before-helper)
+before=$(sha256sum "$STATE")
+run_expected_interrupt "$fault/system/install.sh" "$WORK/before-helper"
+[[ $(sha256sum "$STATE") == "$before" && ! -e $HELPER && ! -L $HELPER && ! -e $UPDATER_DIR ]]
+printf 'INTERRUPT_BEFORE_HELPER_PASS\n'
+"$INSTALLER" repair
+"$UNINSTALLER"
+
+legacy_objects
+fault=$(make_fault_source fault-after-helper after-helper)
+before=$(sha256sum "$STATE")
+run_expected_interrupt "$fault/system/install.sh" "$WORK/after-helper"
+[[ $(sha256sum "$STATE") == "$before" && -f $HELPER ]]
+printf 'foreign replacement after interruption\n' >"$HELPER"
+before=$(sha256sum "$HELPER")
+expect_refusal
+[[ $(sha256sum "$HELPER") == "$before" ]]
+"$UNINSTALLER"
+[[ -f $HELPER ]]
+printf 'INTERRUPT_AFTER_HELPER_RECOVERY_REQUIRED_PASS\nUNKNOWN_REPLACEMENT_SURVIVES_PASS\n'
+# Explicit bounded fixture recovery: remove only the inspected orphan helper,
+# then remove only its empty directory. Ordinary install/uninstall never adopts it.
+rm -f -- "$HELPER"
+rmdir -- "$UPDATER_DIR"
+printf 'EXPLICIT_ORPHAN_RECOVERY_PASS\n'
+
+legacy_objects
+fault=$(make_fault_source fault-after-publication after-publication)
+run_expected_interrupt "$fault/system/install.sh" "$WORK/after-publication"
+[[ $(awk -F '\t' '$1=="state_version" {print $2}' "$STATE") == 2 ]]
+[[ $(awk -F '\t' '$1=="install_phase" {print $2}' "$STATE") == complete ]]
+cmp -s "$SOURCE/system/steamos-update" "$HELPER"
+"$UNINSTALLER"
+[[ ! -e $HELPER && ! -L $HELPER ]]
+printf 'INTERRUPT_AFTER_PUBLICATION_PASS\n'
+
+stock_after=$(sha256sum "$STOCK_DESKTOP" "$AUTOLOGIN")
+[[ $stock_before == "$stock_after" ]]
+printf 'STOCK_HASHES_UNCHANGED_PASS\nUPDATER_VM_HARNESS_PASS\n'

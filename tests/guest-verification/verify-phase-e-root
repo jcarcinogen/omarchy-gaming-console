@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# Root-only Milestone 3 acceptance on the disposable Try Omarchy VM.
+set -euo pipefail
+[[ $EUID == 0 && $(systemd-detect-virt) == qemu && $(hostnamectl --static) == omarchy-vm ]] || exit 78
+exec > >(tee /tmp/ogc-phase-e-root-evidence.txt | systemd-cat -t ogc-phase-e-verify) 2>&1
+
+source_root=/tmp/ogc-phase-e-source
+installer=$source_root/system/install.sh
+uninstaller=$source_root/system/uninstall.sh
+manifest=$source_root/system/ownership.manifest
+state_dir=/var/lib/omarchy-gaming-console
+state_file=$state_dir/install-state.tsv
+payload=/run/omarchy-gaming-console/sddm-oneshot.conf
+runtime=/run/omarchy-gaming-console
+stock=/usr/local/share/wayland-sessions/omarchy.desktop
+autologin=/etc/sddm.conf.d/autologin.conf
+unknown_state=$state_dir/unknown.keep
+unknown_system=/usr/local/bin/ogc-phase-e-unknown.keep
+stock_hash=0a4b9feeecd8822b708281d4c1c98f66421cf1769ff79a1a3b4f25af62886641
+autologin_hash=21a546470a478b00a4deb3ab46c4a648bd3ef17cb5a39ec81fc46b746305e67a
+
+say() { printf '%s %s\n' "$(date --iso-8601=seconds)" "$*"; }
+assert_stock_hashes() {
+  printf '%s  %s\n%s  %s\n' "$stock_hash" "$stock" "$autologin_hash" "$autologin" | sha256sum -c -
+}
+stock_session() {
+  local sid
+  while read -r sid _; do
+    [[ -n $sid ]] || continue
+    [[ $(loginctl show-session "$sid" -p User --value 2>/dev/null) == 1000 ]] || continue
+    [[ $(loginctl show-session "$sid" -p Seat --value 2>/dev/null) == seat0 ]] || continue
+    [[ $(loginctl show-session "$sid" -p State --value 2>/dev/null) == active ]] || continue
+    [[ $(loginctl show-session "$sid" -p Service --value 2>/dev/null) == sddm-autologin ]] || continue
+    [[ -z $(loginctl show-session "$sid" -p Desktop --value 2>/dev/null) ]] || continue
+    printf '%s\n' "$sid"
+    return 0
+  done < <(loginctl list-sessions --no-legend --no-pager)
+  return 1
+}
+wait_stock() {
+  local sid
+  for ((i=0; i<180; i++)); do
+    sid=$(stock_session 2>/dev/null || true)
+    [[ -n $sid ]] && { say "STOCK_ACTIVE session=$sid"; return 0; }
+    sleep 0.5
+  done
+  return 1
+}
+assert_owned() {
+  local kind source destination mode owner group target extra
+  while IFS=$'\t' read -r kind source destination mode owner group target extra; do
+    [[ -n $kind && $kind != \#* ]] || continue
+    if [[ $kind == file ]]; then
+      [[ -f $destination && ! -L $destination ]]
+      [[ $(stat -c '%u:%g:%a' "$destination") == 0:0:${mode#0} ]]
+      cmp "$source_root/system/$source" "$destination"
+    else
+      [[ -L $destination ]]
+      [[ $(readlink "$destination") == "$target" ]]
+      [[ $(stat -c '%u:%g' "$destination") == 0:0 ]]
+    fi
+  done <"$manifest"
+}
+assert_no_owned() {
+  local kind source destination mode owner group target extra
+  while IFS=$'\t' read -r kind source destination mode owner group target extra; do
+    [[ -n $kind && $kind != \#* ]] || continue
+    [[ ! -e $destination && ! -L $destination ]]
+  done <"$manifest"
+}
+owned_digest() {
+  local kind source destination mode owner group target extra
+  while IFS=$'\t' read -r kind source destination mode owner group target extra; do
+    [[ -n $kind && $kind != \#* ]] || continue
+    if [[ $kind == file ]]; then
+      printf '%s\t%s\t' "$destination" "$(stat -c '%u:%g:%a' "$destination")"
+      sha256sum "$destination" | awk '{print $1}'
+    else
+      printf '%s\t%s\t%s\n' "$destination" "$(stat -c '%u:%g' "$destination")" "$(readlink "$destination")"
+    fi
+  done <"$manifest"
+  sha256sum "$state_file" | awk '{print $1}'
+}
+
+[[ -x $installer && -x $uninstaller && -f $manifest ]]
+assert_stock_hashes
+install -d -m 0700 -o root -g root "$state_dir"
+printf 'preserve me\n' >"$unknown_state"
+printf 'preserve me too\n' >"$unknown_system"
+chmod 0600 "$unknown_state"
+chmod 0644 "$unknown_system"
+
+"$installer" install
+assert_owned
+[[ -f $state_file && $(stat -c '%u:%g:%a' "$state_file") == 0:0:600 ]]
+[[ $(awk -F '\t' '$1=="state_version" {print $2}' "$state_file") == 2 ]]
+[[ $(awk -F '\t' '$1=="object" {n++} END {print n+0}' "$state_file") == 9 ]]
+cmp "$source_root/system/steamos-update" /usr/bin/steamos-polkit-helpers/steamos-update
+set +e
+/usr/bin/steamos-polkit-helpers/steamos-update check
+helper_rc=$?
+set -e
+[[ $helper_rc == 7 ]]
+pkaction --action-id org.omarchy.gaming-console.switch >/dev/null
+say FIRST_INSTALL_PASS
+
+before=$(owned_digest | sha256sum | awk '{print $1}')
+"$installer" install
+after=$(owned_digest | sha256sum | awk '{print $1}')
+[[ $before == "$after" ]]
+assert_owned
+say SECOND_INSTALL_IDEMPOTENT_PASS
+
+rm -f /usr/local/bin/steamos-update
+"$installer" repair
+cmp "$source_root/system/steamos-update" /usr/local/bin/steamos-update
+say REPAIR_MISSING_PASS
+
+rm -f /usr/bin/steamos-polkit-helpers/steamos-update
+"$installer" repair
+cmp "$source_root/system/steamos-update" /usr/bin/steamos-polkit-helpers/steamos-update
+say REPAIR_EXACT_STEAM_PATH_PASS
+
+printf '\nmodified-by-phase-e-test\n' >>/usr/local/bin/steamos-select-branch
+"$installer" repair
+cmp "$source_root/system/steamos-select-branch" /usr/local/bin/steamos-select-branch
+say REPAIR_MODIFIED_PASS
+
+[[ -f $unknown_state && -f $unknown_system ]]
+say UNKNOWN_FILES_SURVIVE_PASS
+
+install -d -m 0700 -o root -g root "$runtime"
+printf '[Autologin]\nUser=testuser\nSession=omarchy-console.desktop\nRelogin=false\n' >"$payload"
+chown root:root "$payload"
+chmod 0600 "$payload"
+rm -f "$payload"
+systemctl reset-failed sddm >/dev/null 2>&1 || true
+systemctl restart sddm
+wait_stock
+[[ ! -e $payload && ! -L $payload ]]
+say RESCUE_PASS
+
+"$uninstaller"
+assert_no_owned
+[[ ! -e $state_file && ! -L $state_file ]]
+[[ -f $unknown_state && -f $unknown_system ]]
+for ((i=0; i<30; i++)); do
+  if ! pkaction --action-id org.omarchy.gaming-console.switch >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.1
+done
+! pkaction --action-id org.omarchy.gaming-console.switch >/dev/null 2>&1
+say UNINSTALL_PASS
+say UNKNOWN_FILES_SURVIVE_PASS_AFTER_UNINSTALL
+
+assert_stock_hashes
+say STOCK_HASHES_PASS
+
+# Clean only the two test-owned unknown fixtures after proving uninstall preserved them.
+rm -f "$unknown_state" "$unknown_system"
+rmdir "$state_dir" 2>/dev/null || true
+rmdir "$runtime" 2>/dev/null || true
+say PHASE_E_PRE_REBOOT_PASS

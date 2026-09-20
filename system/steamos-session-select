@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Local Omarchy Gaming Console helper; not Valve software or an Arch package.
+set -euo pipefail
+export PATH=/usr/bin:/bin
+
+state_home=${XDG_STATE_HOME:-${HOME:?}/.local/state}
+state_dir=$state_home/omarchy-gaming-console
+/usr/bin/install -d -m 0700 "$state_dir"
+{
+  printf '%s\t' "$(/bin/date '+%Y-%m-%dT%H:%M:%S%z')"
+  printf '%q ' "$@"
+  printf '\n'
+} >>"$state_dir/steamos-session-select.log"
+
+if [[ ${OGC_DUMMY:-0} == 1 ]]; then
+  [[ ${OGC_DUMMY_SESSION_PID:-} =~ ^[1-9][0-9]*$ ]] || {
+    printf 'Invalid dummy session target.\n' >&2
+    exit 78
+  }
+  target_uid=$(/bin/ps -o uid= -p "$OGC_DUMMY_SESSION_PID" 2>/dev/null | /usr/bin/awk '{ print $1 }')
+  [[ $target_uid == $EUID ]] || {
+    printf 'Dummy session target is not owned by this user.\n' >&2
+    exit 77
+  }
+  kill -TERM "$OGC_DUMMY_SESSION_PID"
+  exit 0
+fi
+
+# Steam's Deck UI may pass a destination name. The Desk personality always
+# returns by ending Steam; the already-consumed SDDM request is never rewritten.
+if [[ -x /usr/bin/steam ]]; then
+  /usr/bin/steam -shutdown >/dev/null 2>&1 || true
+fi
+exit 0

@@ -1,0 +1,38 @@
+# Editor and OS files
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Runtime and generated state
+.cache/
+.cache-*/
+build/
+dist/
+coverage/
+*.log
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+credentials*
+secrets*
+
+# Virtual machines and disk images
+*.qcow2
+*.vdi
+*.vhd
+*.vhdx
+*.img
+*.raw
+*.iso
+*.utm/
+VM/
+vm/
+
+# Machine-local state
+.local/
+.state/

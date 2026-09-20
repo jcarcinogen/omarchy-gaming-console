@@ -1,0 +1,498 @@
+#!/usr/bin/env python3
+"""Fixed user CLI for the Omarchy Gaming Console plugin and system engine."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import pathlib
+import stat
+import subprocess
+import sys
+from typing import Any
+
+SCHEMA = 1
+PLUGIN_ID = "io.github.jcarcinogen.gaming-console"
+SWITCH_WARNING = (
+    "This will close the Omarchy desktop and any open applications. "
+    "Save your work first."
+)
+SWITCH_HELPER = "/usr/local/libexec/omarchy-switch-to-console"
+PAYLOAD = "/run/omarchy-gaming-console/sddm-oneshot.conf"
+RUNTIME_DIR = "/run/omarchy-gaming-console"
+ROUTE = "/etc/sddm.conf.d/zz-omarchy-console-oneshot.conf"
+STATE_DIR = "/var/lib/omarchy-gaming-console"
+UPDATER_DIR = "/usr/bin/steamos-polkit-helpers"
+STOCK_DESKTOP = "/usr/local/share/wayland-sessions/omarchy.desktop"
+AUTOLOGIN = "/etc/sddm.conf.d/autologin.conf"
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+SYSTEM = ROOT / "system"
+
+OBJECTS = (
+    ("file", "omarchy-console-session", "/usr/local/bin/omarchy-console-session", 0o755),
+    ("file", "steamos-session-select", "/usr/local/bin/steamos-session-select", 0o755),
+    ("file", "steamos-update", "/usr/local/bin/steamos-update", 0o755),
+    ("file", "steamos-update", f"{UPDATER_DIR}/steamos-update", 0o755),
+    ("file", "steamos-select-branch", "/usr/local/bin/steamos-select-branch", 0o755),
+    ("file", "omarchy-switch-to-console", SWITCH_HELPER, 0o755),
+    ("file", "omarchy-console.desktop", "/usr/local/share/wayland-sessions/omarchy-console.desktop", 0o644),
+    (
+        "file",
+        "org.omarchy.gaming-console.policy",
+        "/usr/share/polkit-1/actions/org.omarchy.gaming-console.policy",
+        0o644,
+    ),
+    ("symlink", "", ROUTE, 0o777),
+)
+
+
+def _test_root() -> pathlib.Path:
+    if os.environ.get("OGC_STATUS_TESTING") == "1":
+        candidate = os.environ.get("OGC_STATUS_TEST_ROOT", "")
+        if candidate:
+            path = pathlib.Path(candidate).resolve()
+            if path != pathlib.Path("/"):
+                return path
+    return pathlib.Path("/")
+
+
+STATUS_ROOT = _test_root()
+EXPECTED_UID = os.geteuid() if STATUS_ROOT != pathlib.Path("/") else 0
+EXPECTED_GID = os.getegid() if STATUS_ROOT != pathlib.Path("/") else 0
+
+
+def rooted(absolute: str) -> pathlib.Path:
+    return STATUS_ROOT / absolute.lstrip("/")
+
+
+def command_path(name: str) -> pathlib.Path:
+    return rooted(f"/usr/bin/{name}")
+
+
+def run_command(name: str, *args: str) -> subprocess.CompletedProcess[str]:
+    path = command_path(name)
+    if not path.is_file() or not os.access(path, os.X_OK):
+        return subprocess.CompletedProcess([str(path), *args], 127, "", "missing command")
+    return subprocess.run(
+        [str(path), *args],
+        check=False,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+
+
+def safe_regular(path: pathlib.Path, mode: int | None = None) -> bool:
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != EXPECTED_UID or info.st_gid != EXPECTED_GID:
+        return False
+    actual_mode = stat.S_IMODE(info.st_mode)
+    if mode is not None:
+        return actual_mode == mode
+    return actual_mode & 0o022 == 0
+
+
+def safe_directory(path: pathlib.Path, mode: int) -> bool:
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    return (
+        stat.S_ISDIR(info.st_mode)
+        and info.st_uid == EXPECTED_UID
+        and info.st_gid == EXPECTED_GID
+        and stat.S_IMODE(info.st_mode) == mode
+    )
+
+
+def safe_shared_directory(path: pathlib.Path) -> bool:
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    return (
+        stat.S_ISDIR(info.st_mode)
+        and info.st_uid == EXPECTED_UID
+        and info.st_gid == EXPECTED_GID
+        and stat.S_IMODE(info.st_mode) & 0o022 == 0
+    )
+
+
+def file_digest(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(131072), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def exact_file(source_name: str, destination: str, mode: int) -> bool:
+    source = SYSTEM / source_name
+    target = rooted(destination)
+    try:
+        return (
+            safe_regular(target, mode)
+            and source.is_file()
+            and file_digest(source) == file_digest(target)
+        )
+    except OSError:
+        return False
+
+
+def path_exists(path: pathlib.Path) -> bool:
+    try:
+        path.lstat()
+        return True
+    except OSError:
+        return False
+
+
+def ini_values(path: pathlib.Path, wanted: str) -> list[str]:
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    section = ""
+    values: list[str] = []
+    for raw in lines:
+        line = raw.strip()
+        if line.startswith("[") and line.endswith("]"):
+            section = line.replace(" ", "")
+            continue
+        if section != "[Autologin]" or "=" not in raw:
+            continue
+        key, value = raw.split("=", 1)
+        if key.strip() == wanted:
+            values.append(value.strip())
+    return values
+
+
+def stock_desktop_ok() -> bool:
+    path = rooted(STOCK_DESKTOP)
+    if not safe_regular(path):
+        return False
+    try:
+        return any(line.startswith("Exec=") and "uwsm" in line for line in path.read_text().splitlines())
+    except OSError:
+        return False
+
+
+def autologin_ok() -> bool:
+    path = rooted(AUTOLOGIN)
+    return (
+        safe_regular(path)
+        and ini_values(path, "Session") == ["omarchy.desktop"]
+        and len(ini_values(path, "User")) == 1
+        and bool(ini_values(path, "User")[0])
+    )
+
+
+def conflict_paths() -> list[str]:
+    conflicts: list[str] = []
+    directory = rooted("/etc/sddm.conf.d")
+    try:
+        candidates = sorted(directory.iterdir())
+    except OSError:
+        candidates = []
+    for path in candidates:
+        absolute = "/" + str(path.relative_to(STATUS_ROOT))
+        if absolute in (AUTOLOGIN, ROUTE):
+            continue
+        lower = path.name.lower()
+        if "deckshift" in lower or "wopr" in lower or ini_values(path, "Session"):
+            conflicts.append(absolute)
+    global_config = rooted("/etc/sddm.conf")
+    if path_exists(global_config) and ini_values(global_config, "Session"):
+        conflicts.append("/etc/sddm.conf")
+    for base in ("/usr/local/share/wayland-sessions", "/usr/share/wayland-sessions"):
+        directory = rooted(base)
+        try:
+            candidates = sorted(directory.iterdir())
+        except OSError:
+            continue
+        for path in candidates:
+            lower = path.name.lower()
+            if "deckshift" in lower or "wopr" in lower:
+                conflicts.append("/" + str(path.relative_to(STATUS_ROOT)))
+    return conflicts
+
+
+def route_status() -> tuple[bool, bool]:
+    route = rooted(ROUTE)
+    try:
+        info = route.lstat()
+    except OSError:
+        return False, False
+    if not stat.S_ISLNK(info.st_mode):
+        return True, False
+    try:
+        return True, os.readlink(route) == PAYLOAD and info.st_uid == EXPECTED_UID and info.st_gid == EXPECTED_GID
+    except OSError:
+        return True, False
+
+
+def command_version() -> tuple[bool, str]:
+    result = run_command("pacman", "-Q", "try-omarchy-runtime")
+    if result.returncode != 0:
+        result = run_command("pacman", "-Q", "omarchy")
+    line = result.stdout.strip().splitlines()
+    if result.returncode != 0 or not line:
+        return False, "unknown"
+    fields = line[-1].split()
+    version = fields[-1] if fields else "unknown"
+    return version.startswith("4."), version
+
+
+def hostname() -> str:
+    result = run_command("hostnamectl", "--static")
+    return result.stdout.strip() or "unknown"
+
+
+def vm_dummy_boundary() -> bool:
+    virt = run_command("systemd-detect-virt").stdout.strip()
+    return (
+        virt == "qemu"
+        and hostname() == "omarchy-vm"
+        and os.access(command_path("Hyprland"), os.X_OK)
+        and os.access(command_path("foot"), os.X_OK)
+    )
+
+
+def pkaction_visible() -> bool:
+    result = run_command("pkaction", "--action-id", "org.omarchy.gaming-console.switch")
+    return result.returncode == 0
+
+
+def embedded_environment_ok() -> bool:
+    wrapper = rooted("/usr/local/bin/omarchy-console-session")
+    if not safe_regular(wrapper, 0o755):
+        return False
+    try:
+        text = wrapper.read_text(errors="replace")
+    except OSError:
+        return False
+    required = (
+        "unset DISPLAY WAYLAND_DISPLAY XDG_DESKTOP_PORTAL_DIR HYPRLAND_INSTANCE_SIGNATURE",
+        "export XDG_SESSION_TYPE=wayland",
+        "/usr/bin/gamescope --steam --mangoapp --xwayland-count 2",
+        "/usr/bin/steam -gamepadui -steamos3",
+    )
+    return all(item in text for item in required)
+
+
+def status_payload() -> dict[str, Any]:
+    supported, version = command_version()
+    stock_ok = stock_desktop_ok()
+    login_ok = autologin_ok()
+    conflicts = conflict_paths()
+    route_present, route_ok = route_status()
+    runtime_absent = not path_exists(rooted(RUNTIME_DIR))
+    updater_dir = rooted(UPDATER_DIR)
+    updater_dir_present = path_exists(updater_dir)
+    updater_dir_safe = safe_shared_directory(updater_dir)
+
+    gamescope = os.access(command_path("gamescope"), os.X_OK)
+    steam = os.access(command_path("steam"), os.X_OK)
+    mangoapp = os.access(command_path("mangoapp"), os.X_OK)
+    dummy = vm_dummy_boundary()
+
+    present: list[str] = []
+    exact: dict[str, bool] = {}
+    structurally_unsafe: list[str] = []
+    for kind, source, destination, mode in OBJECTS:
+        target = rooted(destination)
+        exists = path_exists(target)
+        if exists:
+            present.append(destination)
+        if kind == "file":
+            exact[destination] = exact_file(source, destination, mode)
+            if exists and not safe_regular(target, mode):
+                structurally_unsafe.append(destination)
+        else:
+            exact[destination] = route_ok
+            if exists and not route_ok:
+                structurally_unsafe.append(destination)
+
+    all_present = len(present) == len(OBJECTS)
+    all_exact = all(exact.values())
+    # The ownership record is intentionally root-only (0700/0600). Ordinary
+    # status checks only the directory boundary and exact installed objects;
+    # authorized lifecycle scripts authenticate the private record itself.
+    state_recorded = safe_directory(rooted(STATE_DIR), 0o700)
+    policy_visible = pkaction_visible()
+    embedded_ok = embedded_environment_ok()
+    dependencies_ok = (gamescope and steam and mangoapp) or dummy
+
+    checks: dict[str, bool] = {
+        "omarchy_desktop": stock_ok,
+        "console_desktop": exact["/usr/local/share/wayland-sessions/omarchy-console.desktop"],
+        "autologin_untouched": login_ok,
+        "oneshot_absent_at_rest": runtime_absent,
+        "steamos_session_select": exact["/usr/local/bin/steamos-session-select"],
+        "gamescope": gamescope,
+        "steam": steam,
+        "mangoapp": mangoapp,
+        "embedded_env_ok": embedded_ok,
+        "vm_dummy_boundary": dummy,
+        "runtime_boundary_satisfied": dependencies_ok,
+        "route_correct": route_ok,
+        "state_recorded": state_recorded,
+        "policy_action": policy_visible,
+        "engine_files_exact": all_exact,
+        "no_conflicts": not conflicts,
+    }
+
+    reasons: list[str] = []
+    unsafe_reasons: list[str] = []
+    if not stock_ok:
+        unsafe_reasons.append("Stock omarchy.desktop is missing or unsafe.")
+    if not login_ok:
+        unsafe_reasons.append("Stock autologin is not exactly Session=omarchy.desktop.")
+    if conflicts:
+        unsafe_reasons.append("Conflicting session or SDDM products: " + ", ".join(conflicts))
+    if structurally_unsafe:
+        unsafe_reasons.append("Owned paths have unsafe type, ownership, or mode: " + ", ".join(structurally_unsafe))
+    if route_present and not route_ok:
+        unsafe_reasons.append("The fixed SDDM route does not match ADR 0001.")
+    if updater_dir_present and not updater_dir_safe:
+        unsafe_reasons.append("The shared Steam updater helper directory is unsafe.")
+
+    if not runtime_absent:
+        unsafe_reasons.append("A Console runtime request exists while the desktop is active.")
+
+    if not supported:
+        state = "unsupported"
+        reasons.append(f"Omarchy 4 is required (found {version}).")
+    elif unsafe_reasons:
+        state = "unsafe"
+        reasons.extend(unsafe_reasons)
+    elif not present and not state_recorded:
+        state = "not_installed"
+        reasons.append("The system engine is not installed.")
+
+    elif not all_present or not route_present or not state_recorded or not policy_visible:
+        state = "incomplete"
+        reasons.append("The system engine is only partly installed; run Repair setup.")
+    elif not all_exact:
+        state = "update_required"
+        reasons.append("Installed engine files differ from this plugin version; run Repair setup.")
+    elif not dependencies_ok:
+        state = "incomplete"
+        reasons.append("The required Gamescope, Steam, and MangoHud/mangoapp runtime is incomplete.")
+    else:
+        state = "ready"
+        if dummy:
+            reasons.append(
+                "Ready on the exact Try Omarchy VM dummy boundary; Gamescope and Steam hardware readiness is not claimed."
+            )
+        else:
+            reasons.append("The complete system engine is installed and safe.")
+
+    return {
+        "schema": SCHEMA,
+        "state": state,
+        "omarchy": version,
+        "hostname": hostname(),
+        "reasons": reasons,
+        "owned": present,
+        "checks": checks,
+    }
+
+
+def print_status(payload: dict[str, Any], as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(payload, separators=(",", ":"), sort_keys=True))
+        return
+    print(f"Omarchy Gaming Console: {payload['state']}")
+    for reason in payload["reasons"]:
+        print(f"- {reason}")
+
+
+def has_terminal() -> bool:
+    return os.environ.get("OGC_CLI_TEST_TTY") == "1" or (sys.stdin.isatty() and sys.stdout.isatty())
+
+
+def launch_visible(command: list[str]) -> int:
+    launcher = "/usr/bin/omarchy-launch-floating-terminal-with-presentation"
+    if not pathlib.Path(launcher).is_file():
+        print("A visible Omarchy terminal launcher is required.", file=sys.stderr)
+        return 69
+    subprocess.Popen(
+        [launcher, *command],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    print("Opened a visible Omarchy terminal.")
+    return 0
+
+
+def run_setup_action(mode: str) -> int:
+    script = ROOT / "setup"
+    command = [str(script)] + (["repair"] if mode == "repair" else [])
+    if not has_terminal():
+        return launch_visible(command)
+    return subprocess.run(command, check=False).returncode
+
+
+def run_uninstall() -> int:
+    command = [str(ROOT / "uninstall")]
+    if not has_terminal():
+        return launch_visible(command)
+    return subprocess.run(command, check=False).returncode
+
+
+def run_switch() -> int:
+    payload = status_payload()
+    if payload["state"] != "ready":
+        print(f"Refusing to switch while status is {payload['state']}.", file=sys.stderr)
+        for reason in payload["reasons"]:
+            print(f"- {reason}", file=sys.stderr)
+        return 78
+    if not has_terminal():
+        return launch_visible([str(pathlib.Path(__file__).resolve()), "switch"])
+    print(SWITCH_WARNING)
+    answer = input("Switch to Console now? [y/N] ").strip().lower()
+    if answer not in ("y", "yes"):
+        print("Cancelled.")
+        return 130
+    return subprocess.run(["/usr/bin/pkexec", SWITCH_HELPER], check=False).returncode
+
+
+def usage() -> int:
+    print(
+        "Usage: omarchy-gaming-console status [--json] | setup | switch | repair | uninstall",
+        file=sys.stderr,
+    )
+    return 64
+
+
+def main(argv: list[str]) -> int:
+    if not argv:
+        return usage()
+    command = argv[0]
+    if command == "status":
+        if len(argv) > 2 or (len(argv) == 2 and argv[1] != "--json"):
+            return usage()
+        print_status(status_payload(), len(argv) == 2)
+        return 0
+    if len(argv) != 1:
+        return usage()
+    if command == "setup":
+        return run_setup_action("install")
+    if command == "repair":
+        return run_setup_action("repair")
+    if command == "uninstall":
+        return run_uninstall()
+    if command == "switch":
+        return run_switch()
+    return usage()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Visible setup/repair entry point. Run this in an Omarchy presentation terminal.
+set -euo pipefail
+export PATH=/usr/local/bin:/usr/bin:/bin
+
+readonly ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly INSTALLER=$ROOT/system/install.sh
+readonly COMPAT_MANAGER=$ROOT/bin/omarchy-gaming-console-compatibility-tools
+mode=${1:-install}
+[[ $# -le 1 && ( $mode == install || $mode == repair ) ]] || {
+  printf 'Usage: %s [install|repair]\n' "$0" >&2
+  exit 64
+}
+[[ -x $INSTALLER ]] || { printf 'Missing executable installer: %s\n' "$INSTALLER" >&2; exit 66; }
+[[ -x $COMPAT_MANAGER ]] || { printf 'Missing compatibility-tool manager: %s\n' "$COMPAT_MANAGER" >&2; exit 66; }
+
+is_try_omarchy_vm() {
+  [[ $(/usr/bin/systemd-detect-virt 2>/dev/null || true) == qemu ]] &&
+    [[ $(/usr/bin/hostnamectl --static 2>/dev/null || true) == omarchy-vm ]]
+}
+
+printf 'Omarchy Gaming Console — %s\n' "$mode"
+printf 'This installs only the separately owned system engine. The Quattro plugin remains separate.\n\n'
+
+if (( EUID != 0 )) && ! is_try_omarchy_vm; then
+  command -v omarchy-pkg-add >/dev/null 2>&1 || { printf 'Missing official omarchy-pkg-add helper.\n' >&2; exit 69; }
+  command -v omarchy-install-gaming-steam >/dev/null 2>&1 || { printf 'Missing official Steam installer.\n' >&2; exit 69; }
+  if [[ ! -x /usr/bin/gamescope ]]; then
+    omarchy-pkg-add gamescope
+  fi
+  if [[ ! -x /usr/bin/mangoapp ]]; then
+    omarchy-pkg-add mangohud
+  fi
+  if [[ ! -x /usr/bin/steam ]]; then
+    omarchy-install-gaming-steam
+  fi
+elif is_try_omarchy_vm; then
+  printf 'Disposable Try Omarchy VM detected; hardware-only Gamescope/Steam/MangoHud packages are not installed on ARM64.\n'
+fi
+
+if (( EUID == 0 )); then
+  "$INSTALLER" "$mode"
+else
+  pkexec "$INSTALLER" "$mode"
+fi
+
+# These are user-owned Steam tools, never privileged system objects. Install
+# only from the visible desktop-user entry point; the ARM64 VM has no hardware
+# Steam boundary. This explicit setup action is not an auto-update-on-launch.
+if (( EUID != 0 )) && ! is_try_omarchy_vm; then
+  "$COMPAT_MANAGER" install
+fi
+
+if [[ $mode == install ]]; then
+  cat <<'NOTICE'
+
+First-launch note:
+  On the first Console launch, Steam may take a little while to start inside Gamescope.
+  The screen may stay black briefly; please wait for Steam to appear.
+
+Updates:
+  Update Omarchy through Omarchy's Update process on the desktop, not Steam's System settings.
+  Steam's "Check For Updates" may show "Update error" from unsupported Steam Deck firmware checks.
+  Dismiss that popup; it does not mean Omarchy's updater failed.
+  Steam client self-updates are separate. Console does not check Omarchy package freshness.
+  BIOS/firmware updates remain hardware-specific and are not managed by this project.
+NOTICE
+fi
+
+cat <<'CARD'
+
+Setup passed. Keep this rescue card:
+  Ctrl+Alt+F3
+  sudo rm -f /run/omarchy-gaming-console/sddm-oneshot.conf
+  sudo systemctl reset-failed sddm
+  sudo systemctl restart sddm
+  sudo rmdir -- /run/omarchy-gaming-console
+
+If rmdir reports a non-empty directory, preserve its contents and investigate.
+If the directory is already absent, no cleanup is needed.
+
+Engine uninstall and `omarchy plugin remove` are separate actions.
+CARD
