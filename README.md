@@ -30,6 +30,8 @@ If setup fails after installing the engine, keep the error output: dependency/co
 
 Look for the **controller glyph on the right side of the Omarchy bar**. It opens one overlay for setup, status, repair, uninstall, and switching to Console.
 
+![Omarchy Gaming Console overlay showing a ready installation and its available actions](examples/console-overlay.png)
+
 The plugin and the privileged system engine remain separate:
 
 - `omarchy plugin add` installs only the Quattro front end.
