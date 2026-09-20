@@ -10,7 +10,7 @@ Omarchy Gaming Console gives your computer a **Steam Box-like experience**: a TV
 
 ## First-time setup
 
-Requires an Omarchy 4 Quattro desktop, a supported x86_64 Gamescope/Steam graphics stack, and permission to authorize system setup locally. Save your work before switching sessions. Detailed hardware acceptance covers the AMD RX 6800 target. An Acer Swift Go 14 also passed user-reported first-use installation, Steam sign-in, manual refresh-rate selection and desktop return; that does not establish gameplay or reboot coverage on the Acer.
+Requires an Omarchy 4 Quattro desktop, a supported x86_64 Gamescope/Steam graphics stack, and permission to authorize system setup locally. Save your work before switching sessions.
 
 From an Omarchy desktop terminal, add and enable the front end:
 
