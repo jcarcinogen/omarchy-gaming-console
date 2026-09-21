@@ -35,7 +35,7 @@ Look for the **controller glyph on the right side of the Omarchy bar**. It opens
 The plugin and the privileged system engine remain separate:
 
 - `omarchy plugin add` installs only the Quattro front end.
-- **Install Game Mode** opens a visible terminal and runs the reviewed setup path.
+- **Install Game Mode** opens a visible terminal and runs the reviewed setup path. Authorization runs stock Python against a reviewed file digest, then installs from a root-owned snapshot. It does not execute the plugin folder as root.
 - Removing the plugin does not silently uninstall system files.
 - **Uninstall Game Mode** removes only the engine objects recorded as owned by this project.
 

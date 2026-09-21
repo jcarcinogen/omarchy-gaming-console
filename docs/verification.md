@@ -8,7 +8,8 @@ From this repository, run:
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py' -q
-bash -n setup uninstall system/install.sh system/uninstall.sh
+bash -n setup uninstall system/enter-privileged system/install.sh system/uninstall.sh
+python3 system/privileged-bootstrap.py --check
 ```
 
 The tests exercise ownership, repair/uninstall preservation, status, DRM admission, display preference safety, compatibility archive validation and updater migration. Root VM harnesses under `tests/guest-verification` are destructive test utilities for a disposable fixture only, not normal setup instructions. Do not run them on a daily-use installation. The exact `omarchy-vm` hostname plus QEMU boundary in production code is an intentional ARM test fixture guard, not a hardware support claim.

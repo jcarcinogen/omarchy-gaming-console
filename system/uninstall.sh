@@ -29,6 +29,17 @@ die() { printf 'REFUSE: %s\n' "$*" >&2; exit 78; }
 for command in awk flock grep loginctl mktemp readlink rmdir sha256sum stat systemctl; do
   command -v "$command" >/dev/null 2>&1 || die "required command is missing: $command"
 done
+
+require_sealed_stage() {
+  local script script_dir
+  script=${BASH_SOURCE[0]}
+  [[ ! -L $script ]] || die 'installer must run from the sealed root stage'
+  script_dir=$(CDPATH= cd -- "$(dirname -- "$script")" && pwd -P)
+  [[ ${script_dir%/*} == /run && ${script_dir##*/} == omarchy-gaming-console-stage.* ]] || die 'installer must run from the sealed root stage'
+  [[ -d $script_dir && ! -L $script_dir ]] || die 'installer must run from the sealed root stage'
+  [[ $(stat -c '%u:%g:%a' "$script_dir") == 0:0:700 ]] || die 'installer must run from the sealed root stage'
+}
+require_sealed_stage
 [[ -f $STATE_FILE && ! -L $STATE_FILE ]] || die 'recorded installation state is missing or unsafe'
 [[ $(stat -c '%u:%g:%a' "$STATE_DIR") == 0:0:700 ]] || die 'installation state directory ownership/mode is unsafe'
 [[ $(stat -c '%u:%g:%a' "$STATE_FILE") == 0:0:600 ]] || die 'installation state file ownership/mode is unsafe'

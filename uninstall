@@ -4,10 +4,10 @@ set -euo pipefail
 export PATH=/usr/local/bin:/usr/bin:/bin
 
 readonly ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-readonly UNINSTALLER=$ROOT/system/uninstall.sh
+readonly ENTRY=$ROOT/system/enter-privileged
 readonly COMPAT_MANAGER=$ROOT/bin/omarchy-gaming-console-compatibility-tools
 [[ $# == 0 ]] || { printf 'Usage: %s\n' "$0" >&2; exit 64; }
-[[ -x $UNINSTALLER ]] || { printf 'Missing executable uninstaller: %s\n' "$UNINSTALLER" >&2; exit 66; }
+[[ -x $ENTRY ]] || { printf 'Missing privileged entry: %s\n' "$ENTRY" >&2; exit 66; }
 [[ -x $COMPAT_MANAGER ]] || { printf 'Missing compatibility-tool manager: %s\n' "$COMPAT_MANAGER" >&2; exit 66; }
 
 printf 'Omarchy Gaming Console — uninstall system engine\n'
@@ -19,10 +19,7 @@ if (( EUID != 0 )); then
   "$COMPAT_MANAGER" uninstall
 fi
 
-if (( EUID == 0 )); then
-  "$UNINSTALLER"
-else
-  pkexec "$UNINSTALLER"
-fi
+printf 'Authorization runs the reviewed root snapshot. It does not execute this folder as root.\n\n'
+"$ENTRY" uninstall
 
 printf '\nEngine removed. If desired, remove the Quattro front end separately with `omarchy plugin remove`.\n'

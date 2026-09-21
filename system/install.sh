@@ -16,11 +16,10 @@ readonly ROUTE=/etc/sddm.conf.d/zz-omarchy-console-oneshot.conf
 readonly PAYLOAD=/run/omarchy-gaming-console/sddm-oneshot.conf
 readonly UPDATER_DIR=/usr/bin/steamos-polkit-helpers
 readonly UPDATER_HELPER=$UPDATER_DIR/steamos-update
-readonly SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-readonly MANIFEST=$SOURCE_DIR/ownership.manifest
 
 existing_state_version=0
 directory_created=0
+SOURCE_DIR=
 
 mode=${1:-install}
 [[ $# -le 1 && ( $mode == install || $mode == repair ) ]] || {
@@ -35,6 +34,20 @@ die() { printf 'REFUSE: %s\n' "$*" >&2; exit 78; }
 for command in awk cmp flock getent grep id install ln mkdir mv pacman pkaction readlink sha256sum stat; do
   command -v "$command" >/dev/null 2>&1 || die "required command is missing: $command"
 done
+
+require_sealed_stage() {
+  local script script_dir
+  script=${BASH_SOURCE[0]}
+  [[ ! -L $script ]] || die 'installer must run from the sealed root stage'
+  script_dir=$(CDPATH= cd -- "$(dirname -- "$script")" && pwd -P)
+  [[ ${script_dir%/*} == /run && ${script_dir##*/} == omarchy-gaming-console-stage.* ]] || die 'installer must run from the sealed root stage'
+  [[ -d $script_dir && ! -L $script_dir ]] || die 'installer must run from the sealed root stage'
+  [[ $(stat -c '%u:%g:%a' "$script_dir") == 0:0:700 ]] || die 'installer must run from the sealed root stage'
+  SOURCE_DIR=$script_dir
+}
+require_sealed_stage
+readonly SOURCE_DIR
+readonly MANIFEST=$SOURCE_DIR/ownership.manifest
 [[ -f $MANIFEST && ! -L $MANIFEST ]] || die 'ownership.manifest is missing or is a symlink'
 exec 9>"$LOCK"
 flock -x 9

@@ -21,6 +21,7 @@ class PhaseESourceContracts(unittest.TestCase):
         paths = (
             ROOT / "setup",
             ROOT / "uninstall",
+            ROOT / "system" / "enter-privileged",
             SYSTEM / "install.sh",
             SYSTEM / "uninstall.sh",
         )
@@ -131,8 +132,9 @@ class PhaseESourceContracts(unittest.TestCase):
         uninstall = self.read("uninstall")
         self.assertIn("Ctrl+Alt+F3", setup)
         self.assertIn("plugin remove", uninstall)
-        self.assertIn("pkexec", setup)
-        self.assertIn("pkexec", uninstall)
+        self.assertIn("enter-privileged", setup)
+        self.assertIn("enter-privileged", uninstall)
+        self.assertIn("pkexec /usr/bin/python3 -I -c", self.read("system/enter-privileged"))
 
     def test_initial_install_warns_that_first_gamescope_steam_launch_can_be_black(self) -> None:
         setup = self.read("setup")

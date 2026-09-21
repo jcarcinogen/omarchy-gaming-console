@@ -82,7 +82,9 @@ owned_digest() {
   sha256sum "$state_file" | awk '{print $1}'
 }
 
-[[ -x $installer && -x $uninstaller && -f $manifest ]]
+[[ -x $installer && -x $uninstaller && -x $source_root/system/enter-privileged && -f $manifest ]]
+chown -R root:root "$source_root"
+chmod -R go-w "$source_root"
 assert_stock_hashes
 install -d -m 0700 -o root -g root "$state_dir"
 printf 'preserve me\n' >"$unknown_state"
@@ -90,7 +92,7 @@ printf 'preserve me too\n' >"$unknown_system"
 chmod 0600 "$unknown_state"
 chmod 0644 "$unknown_system"
 
-"$installer" install
+"$source_root/system/enter-privileged" install
 assert_owned
 [[ -f $state_file && $(stat -c '%u:%g:%a' "$state_file") == 0:0:600 ]]
 [[ $(awk -F '\t' '$1=="state_version" {print $2}' "$state_file") == 2 ]]
@@ -105,24 +107,24 @@ pkaction --action-id org.omarchy.gaming-console.switch >/dev/null
 say FIRST_INSTALL_PASS
 
 before=$(owned_digest | sha256sum | awk '{print $1}')
-"$installer" install
+"$source_root/system/enter-privileged" install
 after=$(owned_digest | sha256sum | awk '{print $1}')
 [[ $before == "$after" ]]
 assert_owned
 say SECOND_INSTALL_IDEMPOTENT_PASS
 
 rm -f /usr/local/bin/steamos-update
-"$installer" repair
+"$source_root/system/enter-privileged" repair
 cmp "$source_root/system/steamos-update" /usr/local/bin/steamos-update
 say REPAIR_MISSING_PASS
 
 rm -f /usr/bin/steamos-polkit-helpers/steamos-update
-"$installer" repair
+"$source_root/system/enter-privileged" repair
 cmp "$source_root/system/steamos-update" /usr/bin/steamos-polkit-helpers/steamos-update
 say REPAIR_EXACT_STEAM_PATH_PASS
 
 printf '\nmodified-by-phase-e-test\n' >>/usr/local/bin/steamos-select-branch
-"$installer" repair
+"$source_root/system/enter-privileged" repair
 cmp "$source_root/system/steamos-select-branch" /usr/local/bin/steamos-select-branch
 say REPAIR_MODIFIED_PASS
 
@@ -140,7 +142,7 @@ wait_stock
 [[ ! -e $payload && ! -L $payload ]]
 say RESCUE_PASS
 
-"$uninstaller"
+"$source_root/system/enter-privileged" uninstall
 assert_no_owned
 [[ ! -e $state_file && ! -L $state_file ]]
 [[ -f $unknown_state && -f $unknown_system ]]

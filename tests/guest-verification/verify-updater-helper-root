@@ -24,8 +24,24 @@ readonly PREDECESSOR_HASH=9a13ce7b40b09ce48046a30d262b6cb9df72eac8fa7cff42695a3a
 readonly STOCK_DESKTOP=/usr/local/share/wayland-sessions/omarchy.desktop
 readonly AUTOLOGIN=/etc/sddm.conf.d/autologin.conf
 readonly WORK=/tmp/ogc-updater-verified-fixture
-[[ -x $INSTALLER && -x $UNINSTALLER && -x $CLI && -f $MANIFEST ]]
+[[ -x $INSTALLER && -x $UNINSTALLER && -x $SOURCE/system/enter-privileged && -x $CLI && -f $MANIFEST ]]
 command -v runuser >/dev/null
+chown -R root:root "$SOURCE"
+chmod -R go-w "$SOURCE"
+
+seal_unchecked() {
+  local system_dir=$1 stage name base
+  stage=$(mktemp -d /run/omarchy-gaming-console-stage.XXXXXX)
+  chmod 0700 "$stage"
+  chown root:root "$stage"
+  for name in "$system_dir"/*; do
+    [[ -f $name && ! -L $name ]] || { printf 'REFUSE: stage source is not a regular file: %s\n' "$name" >&2; exit 78; }
+    base=${name##*/}
+    install -m 0644 -o root -g root "$name" "$stage/$base"
+  done
+  chmod 0755 "$stage/install.sh" "$stage/uninstall.sh"
+  printf '%s\n' "$stage"
+}
 
 rm -rf -- "$WORK"
 install -d -m 0700 -o root -g root "$WORK"
@@ -65,9 +81,9 @@ legacy_objects() {
 }
 
 expect_refusal() {
-  local installer=${1:-$INSTALLER} output rc
+  local output rc
   set +e
-  output=$($installer repair 2>&1)
+  output=$("$SOURCE/system/enter-privileged" repair 2>&1)
   rc=$?
   set -e
   [[ $rc == 78 ]] || { printf 'Expected refusal, got rc=%s: %s\n' "$rc" "$output" >&2; exit 1; }
@@ -101,9 +117,10 @@ PY
 }
 
 run_expected_interrupt() {
-  local installer=$1 output=$2 rc
+  local installer=$1 output=$2 rc stage
+  stage=$(seal_unchecked "$(dirname -- "$installer")")
   set +e
-  "$installer" repair >"$output.stdout" 2>"$output.stderr"
+  "$stage/install.sh" repair >"$output.stdout" 2>"$output.stderr"
   rc=$?
   set -e
   [[ $rc == 99 ]] || { printf 'Expected injected interruption rc=99, got %s\n' "$rc" >&2; exit 1; }
@@ -111,7 +128,7 @@ run_expected_interrupt() {
 
 # Baseline cleanup uses only a valid recorded uninstall. Never remove a
 # preexisting shared directory to manufacture fixture ownership.
-if [[ -f $STATE && ! -L $STATE ]]; then "$UNINSTALLER"; fi
+if [[ -f $STATE && ! -L $STATE ]]; then "$SOURCE/system/enter-privileged" uninstall; fi
 [[ ! -e $HELPER && ! -L $HELPER && ! -e $UPDATER_DIR && ! -L $UPDATER_DIR ]] || {
   printf 'Disposable fixture is not clean; refusing to alter preexisting shared updater paths.\n' >&2
   exit 78
@@ -158,7 +175,7 @@ rmdir "$WORK/symlink-target"
 
 # Exact v1 migration, exact-path inert helper behavior, and genuine non-root status.
 legacy_state
-"$INSTALLER" repair
+"$SOURCE/system/enter-privileged" repair
 [[ $(awk -F '\t' '$1=="state_version" {print $2}' "$STATE") == 2 ]]
 [[ $(awk -F '\t' '$1=="install_phase" {print $2}' "$STATE") == complete ]]
 [[ $(awk -F '\t' '$1=="object" {n++} END {print n+0}' "$STATE") == 9 ]]
@@ -179,53 +196,53 @@ runuser -u "$desktop_user" -- "$CLI" status --json >"$WORK/nonroot-status.json"
 grep -Fq '"state":"ready"' "$WORK/nonroot-status.json"
 printf 'GENUINE_NONROOT_STATUS_PASS\n'
 before=$(sha256sum "$STATE" "$HELPER" /usr/local/bin/steamos-update)
-"$INSTALLER" repair
+"$SOURCE/system/enter-privileged" repair
 after=$(sha256sum "$STATE" "$HELPER" /usr/local/bin/steamos-update)
 [[ $before == "$after" ]]
 printf 'IDEMPOTENT_REPAIR_PASS\n'
-"$UNINSTALLER"
+"$SOURCE/system/enter-privileged" uninstall
 [[ ! -e $UPDATER_DIR && ! -L $UPDATER_DIR ]]
 printf 'PROJECT_DIRECTORY_REMOVED_PASS\n'
 
 # Existing directory metadata is preserved across install, repair, and uninstall.
 install -d -m 0700 -o root -g root "$UPDATER_DIR"
 legacy_objects
-"$INSTALLER" repair
+"$SOURCE/system/enter-privileged" repair
 [[ $(stat -c '%u:%g:%a' "$UPDATER_DIR") == 0:0:700 ]]
-"$INSTALLER" repair
+"$SOURCE/system/enter-privileged" repair
 [[ $(stat -c '%u:%g:%a' "$UPDATER_DIR") == 0:0:700 ]]
-"$UNINSTALLER"
+"$SOURCE/system/enter-privileged" uninstall
 [[ -d $UPDATER_DIR && ! -L $UPDATER_DIR && $(stat -c '%a' "$UPDATER_DIR") == 700 ]]
 rmdir -- "$UPDATER_DIR"
 printf 'DIRECTORY_METADATA_DRIFT_PRESERVED_PASS\nSHARED_DIRECTORY_PRESERVED_PASS\n'
 
 # Modified/reowned/symlinked recorded helpers are preserved and repair refuses.
 legacy_objects
-"$INSTALLER" repair
+"$SOURCE/system/enter-privileged" repair
 printf 'modified\n' >>"$HELPER"
 before=$(sha256sum "$HELPER")
 expect_refusal
 [[ $(sha256sum "$HELPER") == "$before" ]]
-"$UNINSTALLER"
+"$SOURCE/system/enter-privileged" uninstall
 [[ -f $HELPER ]]
 printf 'MODIFIED_HELPER_PRESERVED_PASS\n'
 rm -f -- "$HELPER"
 rmdir -- "$UPDATER_DIR"
 legacy_objects
-"$INSTALLER" repair
+"$SOURCE/system/enter-privileged" repair
 chown 1000:1000 "$HELPER"
 expect_refusal
-"$UNINSTALLER"
+"$SOURCE/system/enter-privileged" uninstall
 [[ -f $HELPER && $(stat -c '%u:%g' "$HELPER") == 1000:1000 && -d $UPDATER_DIR ]]
 printf 'UNOWNED_HELPER_PRESERVED_PASS\n'
 rm -f -- "$HELPER"
 rmdir -- "$UPDATER_DIR"
 legacy_objects
-"$INSTALLER" repair
+"$SOURCE/system/enter-privileged" repair
 rm -f -- "$HELPER"
 ln -s "$WORK/unknown-helper-target" "$HELPER"
 expect_refusal
-"$UNINSTALLER"
+"$SOURCE/system/enter-privileged" uninstall
 [[ -L $HELPER ]]
 printf 'SYMLINKED_HELPER_PRESERVED_PASS\n'
 rm -- "$HELPER"
@@ -233,10 +250,10 @@ rmdir -- "$UPDATER_DIR"
 
 # Uninstall validates the entire shared parent chain before touching the leaf.
 legacy_objects
-"$INSTALLER" repair
+"$SOURCE/system/enter-privileged" repair
 mv -- "$UPDATER_DIR" "$WORK/replaced-parent-target"
 ln -s "$WORK/replaced-parent-target" "$UPDATER_DIR"
-"$UNINSTALLER"
+"$SOURCE/system/enter-privileged" uninstall
 [[ -L $UPDATER_DIR && -f $WORK/replaced-parent-target/steamos-update ]]
 printf 'SYMLINKED_PARENT_UNINSTALL_PRESERVES_PASS\n'
 rm -- "$UPDATER_DIR"
@@ -246,13 +263,14 @@ rmdir -- "$WORK/replaced-parent-target"
 # Source-only upgrades authenticate old ownership structurally, preserve via the
 # recorded helper hash, publish the new hash, and remain uninstallable.
 legacy_objects
-"$INSTALLER" repair
+"$SOURCE/system/enter-privileged" repair
 cp -a -- "$SOURCE" "$WORK/source-only"
 printf '\n# source-only lifecycle fixture\n' >>"$WORK/source-only/system/steamos-update"
-"$WORK/source-only/system/install.sh" repair
+source_only_stage=$(seal_unchecked "$WORK/source-only/system")
+"$source_only_stage/install.sh" repair
 new_hash=$(sha256sum "$WORK/source-only/system/steamos-update" | awk '{print $1}')
 [[ $(awk -F '\t' -v p="$HELPER" '$1=="object" && $3==p {print $7}' "$STATE") == "$new_hash" ]]
-"$WORK/source-only/system/uninstall.sh"
+"$source_only_stage/uninstall.sh"
 [[ ! -e $HELPER && ! -L $HELPER ]]
 printf 'SOURCE_ONLY_UPGRADE_LIFECYCLE_PASS\n'
 
@@ -263,8 +281,8 @@ before=$(sha256sum "$STATE")
 run_expected_interrupt "$fault/system/install.sh" "$WORK/before-helper"
 [[ $(sha256sum "$STATE") == "$before" && ! -e $HELPER && ! -L $HELPER && ! -e $UPDATER_DIR ]]
 printf 'INTERRUPT_BEFORE_HELPER_PASS\n'
-"$INSTALLER" repair
-"$UNINSTALLER"
+"$SOURCE/system/enter-privileged" repair
+"$SOURCE/system/enter-privileged" uninstall
 
 legacy_objects
 fault=$(make_fault_source fault-after-helper after-helper)
@@ -275,7 +293,7 @@ printf 'foreign replacement after interruption\n' >"$HELPER"
 before=$(sha256sum "$HELPER")
 expect_refusal
 [[ $(sha256sum "$HELPER") == "$before" ]]
-"$UNINSTALLER"
+"$SOURCE/system/enter-privileged" uninstall
 [[ -f $HELPER ]]
 printf 'INTERRUPT_AFTER_HELPER_RECOVERY_REQUIRED_PASS\nUNKNOWN_REPLACEMENT_SURVIVES_PASS\n'
 # Explicit bounded fixture recovery: remove only the inspected orphan helper,
@@ -290,7 +308,7 @@ run_expected_interrupt "$fault/system/install.sh" "$WORK/after-publication"
 [[ $(awk -F '\t' '$1=="state_version" {print $2}' "$STATE") == 2 ]]
 [[ $(awk -F '\t' '$1=="install_phase" {print $2}' "$STATE") == complete ]]
 cmp -s "$SOURCE/system/steamos-update" "$HELPER"
-"$UNINSTALLER"
+"$SOURCE/system/enter-privileged" uninstall
 [[ ! -e $HELPER && ! -L $HELPER ]]
 printf 'INTERRUPT_AFTER_PUBLICATION_PASS\n'
 
