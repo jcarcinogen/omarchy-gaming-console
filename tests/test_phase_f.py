@@ -305,10 +305,23 @@ class PhaseFSourceContracts(unittest.TestCase):
             readme,
         )
 
-    def test_readme_one_copy_block_bypasses_stale_latest_release_redirects(self) -> None:
+    def test_readme_one_copy_block_is_bound_to_reviewed_immutable_helper(self) -> None:
         readme = self.read("README.md")
-        self.assertIn("fresh=$(date +%s%N)", readme)
-        self.assertEqual(3, readme.count('?fresh=$fresh"'))
+        immutable_base = (
+            "base=https://github.com/jcarcinogen/omarchy-gaming-console/"
+            "releases/download/engine-helper-4297ecf"
+        )
+        package_digest = "86b3ed97f7f99841bdbd210f44e8c909285501fefc53187862d7c601dc3dc746"
+        self.assertIn(immutable_base, readme)
+        self.assertNotIn("releases/latest/download", readme)
+        self.assertNotIn("?fresh=", readme)
+        self.assertIn(f"expected_package_sha256={package_digest}", readme)
+        self.assertIn(
+            'actual_package_sha256=$(sha256sum omarchy-gaming-console-engine-any.pkg.tar.zst | awk \'{print $1}\')',
+            readme,
+        )
+        self.assertIn('[[ $actual_package_sha256 == "$expected_package_sha256" ]]', readme)
+        self.assertLess(readme.index("actual_package_sha256="), readme.index("gpg --verify"))
 
     def test_readme_one_copy_block_bounds_asset_sizes_and_total_download_time(self) -> None:
         readme = self.read("README.md")

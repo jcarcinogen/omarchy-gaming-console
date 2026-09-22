@@ -24,8 +24,8 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cd "$work"
 
-base=https://github.com/jcarcinogen/omarchy-gaming-console/releases/latest/download
-fresh=$(date +%s%N)
+base=https://github.com/jcarcinogen/omarchy-gaming-console/releases/download/engine-helper-4297ecf
+expected_package_sha256=86b3ed97f7f99841bdbd210f44e8c909285501fefc53187862d7c601dc3dc746
 deadline=$((SECONDS + 600))
 
 download_asset() {
@@ -43,11 +43,17 @@ download_asset() {
 }
 
 download_asset omarchy-gaming-console-engine-any.pkg.tar.zst 1048576 \
-  "$base/omarchy-gaming-console-engine-any.pkg.tar.zst?fresh=$fresh"
+  "$base/omarchy-gaming-console-engine-any.pkg.tar.zst"
 download_asset omarchy-gaming-console-engine-any.pkg.tar.zst.sig 16384 \
-  "$base/omarchy-gaming-console-engine-any.pkg.tar.zst.sig?fresh=$fresh"
+  "$base/omarchy-gaming-console-engine-any.pkg.tar.zst.sig"
 download_asset omarchy-gaming-console-engine-signing-key.asc 65536 \
-  "$base/omarchy-gaming-console-engine-signing-key.asc?fresh=$fresh"
+  "$base/omarchy-gaming-console-engine-signing-key.asc"
+
+actual_package_sha256=$(sha256sum omarchy-gaming-console-engine-any.pkg.tar.zst | awk '{print $1}')
+[[ $actual_package_sha256 == "$expected_package_sha256" ]] || {
+  printf 'Engine-helper package checksum mismatch. Nothing was installed.\n' >&2
+  exit 1
+}
 
 fingerprint=$(gpg --show-keys --with-colons omarchy-gaming-console-engine-signing-key.asc | awk -F: '$1 == "fpr" { print $10; exit }')
 [[ $fingerprint == 5F080326EB4583CA063F9CA56E6DF2952E09D28D ]] || {
@@ -68,7 +74,7 @@ The three fixed-name assets downloaded by that block are:
 - `omarchy-gaming-console-engine-any.pkg.tar.zst.sig`
 - `omarchy-gaming-console-engine-signing-key.asc`
 
-The expected signing-key fingerprint is `5F08 0326 EB45 83CA 063F 9CA5 6E6D F295 2E09 D28D`. If either the fingerprint or signature is wrong, the block stops before package installation. Pacman then verifies the same detached signature. The package installs the root-owned helper and its narrow polkit policy. The helper itself fixes the one marketplace-reviewed 40-character commit it may fetch and execute; the plugin cannot supply or replace that identity.
+The block uses the immutable `engine-helper-4297ecf` release and requires package SHA-256 `86b3ed97f7f99841bdbd210f44e8c909285501fefc53187862d7c601dc3dc746`. The expected signing-key fingerprint is `5F08 0326 EB45 83CA 063F 9CA5 6E6D F295 2E09 D28D`. If the checksum, fingerprint, or signature is wrong, the block stops before package installation. Pacman then verifies the same detached signature. The package installs the root-owned helper and its narrow polkit policy. That immutable package fixes reviewed commit `4297ecf6caa9b7449a1a52fedcc3d1383fbdf9c4`; the plugin cannot supply or replace that identity.
 
 ### Install the front end
 
