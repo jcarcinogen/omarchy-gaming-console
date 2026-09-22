@@ -25,13 +25,14 @@ trap 'rm -rf "$work"' EXIT
 cd "$work"
 
 base=https://github.com/jcarcinogen/omarchy-gaming-console/releases/latest/download
+fresh=$(date +%s%N)
 curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --silent --show-error --location \
   --output omarchy-gaming-console-engine-any.pkg.tar.zst \
-  "$base/omarchy-gaming-console-engine-any.pkg.tar.zst" \
+  "$base/omarchy-gaming-console-engine-any.pkg.tar.zst?fresh=$fresh" \
   --output omarchy-gaming-console-engine-any.pkg.tar.zst.sig \
-  "$base/omarchy-gaming-console-engine-any.pkg.tar.zst.sig" \
+  "$base/omarchy-gaming-console-engine-any.pkg.tar.zst.sig?fresh=$fresh" \
   --output omarchy-gaming-console-engine-signing-key.asc \
-  "$base/omarchy-gaming-console-engine-signing-key.asc"
+  "$base/omarchy-gaming-console-engine-signing-key.asc?fresh=$fresh"
 
 fingerprint=$(gpg --show-keys --with-colons omarchy-gaming-console-engine-signing-key.asc | awk -F: '$1 == "fpr" { print $10; exit }')
 [[ $fingerprint == 5F080326EB4583CA063F9CA56E6DF2952E09D28D ]] || {

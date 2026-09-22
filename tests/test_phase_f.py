@@ -295,6 +295,11 @@ class PhaseFSourceContracts(unittest.TestCase):
             readme,
         )
 
+    def test_readme_one_copy_block_bypasses_stale_latest_release_redirects(self) -> None:
+        readme = self.read("README.md")
+        self.assertIn("fresh=$(date +%s%N)", readme)
+        self.assertEqual(3, readme.count('?fresh=$fresh"'))
+
     def test_embedded_environment_contract_requires_two_xwaylands(self) -> None:
         text = CLI.read_text()
         self.assertIn('"/usr/bin/gamescope --steam --mangoapp --xwayland-count 2"', text)
