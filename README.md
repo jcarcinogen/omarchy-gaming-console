@@ -12,6 +12,36 @@ Omarchy Gaming Console gives your computer a **Steam Box-like experience**: a TV
 
 Requires an Omarchy 4 Quattro desktop, a supported x86_64 Gamescope/Steam graphics stack, and permission to authorize system setup locally. Save your work before switching sessions.
 
+### Install the signed engine helper
+
+The privileged lifecycle helper is deliberately **not** installed from the plugin checkout. Download the three fixed-name assets from the [latest engine-helper release](https://github.com/jcarcinogen/omarchy-gaming-console/releases/latest):
+
+- `omarchy-gaming-console-engine-any.pkg.tar.zst`
+- `omarchy-gaming-console-engine-any.pkg.tar.zst.sig`
+- `omarchy-gaming-console-engine-signing-key.asc`
+
+Before any privileged command, verify that the public key fingerprint is exactly:
+
+```text
+5F08 0326 EB45 83CA 063F  9CA5 6E6D F295 2E09 D28D
+```
+
+Then add that verified key to pacman and install the signed package:
+
+```bash
+fingerprint=$(gpg --show-keys --with-colons omarchy-gaming-console-engine-signing-key.asc | awk -F: '$1 == "fpr" { print $10; exit }')
+[[ $fingerprint == 5F080326EB4583CA063F9CA56E6DF2952E09D28D ]] || { printf 'Signing-key fingerprint mismatch.\n' >&2; exit 1; }
+gpg --import omarchy-gaming-console-engine-signing-key.asc
+gpg --verify omarchy-gaming-console-engine-any.pkg.tar.zst.sig omarchy-gaming-console-engine-any.pkg.tar.zst
+sudo pacman-key --add omarchy-gaming-console-engine-signing-key.asc
+sudo pacman-key --lsign-key 5F080326EB4583CA063F9CA56E6DF2952E09D28D
+sudo pacman -U ./omarchy-gaming-console-engine-any.pkg.tar.zst
+```
+
+Pacman verifies the detached signature. The package installs the root-owned helper and its narrow polkit policy. The helper itself fixes the one marketplace-reviewed 40-character commit it may fetch and execute; the plugin cannot supply or replace that identity.
+
+### Install the front end
+
 From an Omarchy desktop terminal, add and enable the front end:
 
 ```bash
@@ -19,7 +49,7 @@ omarchy plugin add https://github.com/jcarcinogen/omarchy-gaming-console.git --e
 ```
 
 1. Review the plugin trust prompt and choose a bar location (default: **right**).
-2. Click the controller glyph, then **Install Game Mode**. Follow the visible terminal and local authorization prompts. Setup installs missing Gamescope, Steam and MangoHud dependencies through Omarchy's helpers and installs the separately owned Console engine.
+2. Click the controller glyph, then **Install Game Mode**. Follow the visible terminal and local authorization prompts. Setup installs missing Gamescope, Steam and MangoHud dependencies through Omarchy's helpers, then asks only the package-owned Console engine manager to install the system engine.
 3. Setup also downloads the pinned Proton-CachyOS SLR and GE-Proton tools for your user. Their **use is optional**, but their acquisition currently runs automatically during hardware setup/repair. Neither is assigned to any game or made the global default. Downloads require network access.
 4. Once status is **ready**, save your work and choose **Switch to Console**. This ends the desktop session; Steam may take a while to appear on first launch. Sign in locally if Steam asks.
 5. To return, use Steam's **Power → Switch to Desktop**. Omarchy remains the normal boot destination.
@@ -35,7 +65,7 @@ Look for the **controller glyph on the right side of the Omarchy bar**. It opens
 The plugin and the privileged system engine remain separate:
 
 - `omarchy plugin add` installs only the Quattro front end.
-- **Install Game Mode** opens a visible terminal and runs the reviewed setup path. Root downloads the verifier from the pinned GitHub remote, checks that blob digest with stock git, and installs from that verified copy. It does not execute the plugin folder as root.
+- **Install Game Mode** invokes only `/usr/lib/omarchy-gaming-console/engine-manager`, supplied by the separately installed signed Arch package. That root-owned helper pins one exact reviewed commit and does not accept code, URLs, repositories, digests, or commits from the plugin folder.
 - Removing the plugin does not silently uninstall system files.
 - **Uninstall Game Mode** removes only the engine objects recorded as owned by this project.
 

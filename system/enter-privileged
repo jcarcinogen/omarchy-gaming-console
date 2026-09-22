@@ -1,52 +1,23 @@
 #!/usr/bin/env bash
-# Visible privileged handoff. Root does not read the plugin directory.
-# Stock curl downloads the verifier from GitHub. Stock git checks that download
-# against GitHub's blob digest. Only the matching root-owned /run copy is run.
+# Calls only the separately installed, package-owned lifecycle manager.
+# No code, URL, digest, repository, or commit from this plugin is run as root.
 set -euo pipefail
 export PATH=/usr/bin:/bin
 
+readonly HELPER=/usr/lib/omarchy-gaming-console/engine-manager
 mode=${1:-}
 [[ $# -eq 1 && ( $mode == install || $mode == repair || $mode == uninstall ) ]] || {
   printf 'Usage: %s install|repair|uninstall\n' "$0" >&2
   exit 64
 }
-command -v /usr/bin/curl >/dev/null 2>&1 || { printf 'Missing /usr/bin/curl.\n' >&2; exit 69; }
-command -v /usr/bin/git >/dev/null 2>&1 || { printf 'Missing /usr/bin/git.\n' >&2; exit 69; }
-
-readonly RAW_URL=https://raw.githubusercontent.com/jcarcinogen/omarchy-gaming-console/main/system/trust-fetch.py
-readonly BLOB_URL='https://api.github.com/repos/jcarcinogen/omarchy-gaming-console/contents/system/trust-fetch.py?ref=main'
-readonly TRUST=/run/omarchy-gaming-console-trust-fetch.py
-readonly BLOB=/run/omarchy-gaming-console-trust-fetch.blob
-
-run() {
-  if (( EUID == 0 )); then
-    "$@"
-  else
-    pkexec "$@"
-  fi
+[[ -x $HELPER && ! -L $HELPER ]] || {
+  printf 'The signed Omarchy Gaming Console engine package is not installed.\n' >&2
+  printf 'Install it using the package instructions in README.md, then try again.\n' >&2
+  exit 69
 }
 
-printf 'Downloading the privileged verifier from GitHub.\n'
-run /usr/bin/curl \
-  --proto '=https' \
-  --proto-redir '=https' \
-  --tlsv1.2 \
-  --fail \
-  --silent \
-  --show-error \
-  --location \
-  --output "$TRUST" \
-  "$RAW_URL" \
-  --output "$BLOB" \
-  "$BLOB_URL"
-run /usr/bin/chmod 644 "$TRUST" "$BLOB"
-
-advertised=$(/usr/bin/awk -F'"' '/"sha":/{print $4; exit}' "$BLOB")
-actual=$(/usr/bin/git hash-object "$TRUST")
-[[ $advertised =~ ^[0-9a-f]{40}$ && $advertised == "$actual" ]] || {
-  printf 'Refusing trust fetch: GitHub blob digest does not match the download.\n' >&2
-  exit 78
-}
-
-printf 'GitHub blob digest matched. Running that verifier.\n'
-run /usr/bin/python3 -I "$TRUST" "$mode"
+if (( EUID == 0 )); then
+  "$HELPER" "$mode"
+else
+  pkexec "$HELPER" "$mode"
+fi

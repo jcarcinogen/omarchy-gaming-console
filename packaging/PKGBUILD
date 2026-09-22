@@ -1,0 +1,42 @@
+pkgname=omarchy-gaming-console-engine
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Package-owned privileged lifecycle manager for Omarchy Gaming Console'
+arch=('any')
+url='https://github.com/jcarcinogen/omarchy-gaming-console'
+license=('MIT')
+depends=('git' 'python' 'polkit')
+source=('engine-manager.py.in' 'org.omarchy.gaming-console.engine.policy')
+sha256sums=('bd6d7a971db14d45a715345369a077527dcacc32ed30166a8099739fe4afcd15'
+            '7fe029d719fcd3a605da156b1cca9a3ad931e807fd0560e4c7c08907ce25083d')
+
+prepare() {
+  [[ ${REVIEWED_COMMIT:-} =~ ^[0-9a-f]{40}$ ]] || {
+    printf 'REVIEWED_COMMIT must be the exact 40-character marketplace-reviewed commit.\n' >&2
+    return 1
+  }
+
+  local verify_dir="$srcdir/reviewed-commit-check"
+  rm -rf -- "$verify_dir"
+  git -c protocol.file.allow=never init --quiet "$verify_dir"
+  git -C "$verify_dir" remote add origin https://github.com/jcarcinogen/omarchy-gaming-console.git
+  git -C "$verify_dir" -c core.hooksPath=/dev/null -c protocol.file.allow=never \
+    fetch --quiet --depth 1 origin "$REVIEWED_COMMIT"
+  [[ $(git -C "$verify_dir" rev-parse FETCH_HEAD) == "$REVIEWED_COMMIT" ]] || {
+    printf 'REVIEWED_COMMIT did not resolve to the exact requested object.\n' >&2
+    return 1
+  }
+  rm -rf -- "$verify_dir"
+
+  cp -- engine-manager.py.in engine-manager
+  sed -i "s/@REVIEWED_COMMIT@/$REVIEWED_COMMIT/g" engine-manager
+  ! grep -q '@REVIEWED_COMMIT@' engine-manager
+  printf '%s\n' "$REVIEWED_COMMIT" > reviewed-commit
+}
+
+package() {
+  install -Dm755 engine-manager "$pkgdir/usr/lib/omarchy-gaming-console/engine-manager"
+  install -Dm644 reviewed-commit "$pkgdir/usr/share/omarchy-gaming-console/reviewed-commit"
+  install -Dm644 org.omarchy.gaming-console.engine.policy \
+    "$pkgdir/usr/share/polkit-1/actions/org.omarchy.gaming-console.engine.policy"
+}

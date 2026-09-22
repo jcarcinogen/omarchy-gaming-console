@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""Package-owned privileged lifecycle manager for Omarchy Gaming Console.
+
+The package build replaces @REVIEWED_COMMIT@ with one exact marketplace-reviewed
+commit. This root-owned program accepts only a lifecycle verb, fetches only that
+commit, checks it out detached, and executes the fetched bootstrap. It never
+reads the user-writable plugin checkout and never accepts a repository or
+commit from its caller.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ORIGIN = "https://github.com/jcarcinogen/omarchy-gaming-console.git"
+REVIEWED_COMMIT = "@REVIEWED_COMMIT@"
+SELF = Path("/usr/lib/omarchy-gaming-console/engine-manager")
+
+
+def refuse(message: str) -> "None":
+    print(f"REFUSE: {message}", file=sys.stderr)
+    raise SystemExit(78)
+
+
+def validate_installation() -> None:
+    if os.geteuid() != 0:
+        refuse("engine manager must run as root")
+    if not re.fullmatch(r"[0-9a-f]{40}", REVIEWED_COMMIT) or len(REVIEWED_COMMIT) != 40:
+        refuse("package has no exact reviewed commit")
+    try:
+        info = SELF.lstat()
+    except OSError as exc:
+        refuse(f"package-owned helper is unavailable: {exc}")
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        refuse("package-owned helper is not a regular file")
+    if info.st_uid != 0 or stat.S_IMODE(info.st_mode) & 0o022:
+        refuse("package-owned helper is not root-owned and immutable to users")
+    if Path(sys.argv[0]).resolve() != SELF:
+        refuse("engine manager must run from its package-owned path")
+
+
+def git(*args: str, cwd: Path | None = None) -> str:
+    env = {
+        "HOME": "/root",
+        "LANG": "C.UTF-8",
+        "PATH": "/usr/bin:/bin",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+    result = subprocess.run(
+        ["/usr/bin/git", "-c", "core.hooksPath=/dev/null", "-c", "protocol.file.allow=never", *args],
+        cwd=cwd,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def fetch_reviewed_snapshot() -> Path:
+    stage = Path(tempfile.mkdtemp(prefix="omarchy-gaming-console-source.", dir="/run"))
+    os.chmod(stage, 0o700)
+    os.chown(stage, 0, 0)
+    git("init", "--quiet", str(stage))
+    git("remote", "add", "origin", ORIGIN, cwd=stage)
+    git("fetch", "--depth", "1", "origin", REVIEWED_COMMIT, cwd=stage)
+    git("checkout", "--quiet", "--detach", "FETCH_HEAD", cwd=stage)
+    head = git("rev-parse", "HEAD", cwd=stage)
+    if head != REVIEWED_COMMIT:
+        shutil.rmtree(stage, ignore_errors=True)
+        refuse("fetched snapshot does not match the package-pinned commit")
+    return stage
+
+
+def main() -> None:
+    validate_installation()
+    if len(sys.argv) != 2 or sys.argv[1] not in {"install", "repair", "uninstall"}:
+        raise SystemExit("Usage: engine-manager install|repair|uninstall")
+    mode = sys.argv[1]
+    source = fetch_reviewed_snapshot()
+    bootstrap = source / "system" / "privileged-bootstrap.py"
+    if bootstrap.is_symlink() or not bootstrap.is_file():
+        refuse("reviewed snapshot has no regular bootstrap")
+    os.execv(
+        "/usr/bin/python3",
+        ["/usr/bin/python3", "-I", str(bootstrap), mode, str(source / "system")],
+    )
+
+
+if __name__ == "__main__":
+    main()

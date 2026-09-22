@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Seal a reviewed engine snapshot and run only that root-owned copy.
 
-Production setup does not execute this file from the plugin directory. The
-root-owned trust fetch clones the pinned GitHub remote, checks that commit,
-and only then executes this copy from that clone. Each payload is read once
-through an O_NOFOLLOW descriptor, checked against its digest, and written into
-a root-owned /run snapshot. install.sh and uninstall.sh then run only from
-that snapshot.
+Production setup reaches this file only through the separately installed,
+package-owned engine manager. That manager pins one exact reviewed commit and
+never reads a repository, commit, URL, or executable path from the plugin.
+Each payload is read once through an O_NOFOLLOW descriptor, checked against its
+digest, and written into a root-owned /run snapshot. install.sh and
+uninstall.sh then run only from that snapshot.
 """
 
 from __future__ import annotations

@@ -12,7 +12,7 @@ bash -n setup uninstall system/enter-privileged system/install.sh system/uninsta
 python3 system/privileged-bootstrap.py --check
 ```
 
-The tests exercise ownership, repair/uninstall preservation, status, DRM admission, display preference safety, compatibility archive validation and updater migration. Production setup downloads `system/trust-fetch.py` from the pinned GitHub remote, checks GitHub's blob digest, and runs only that root-owned `/run` copy. The disposable VM harnesses call the local bootstrap directly because they are already root and must exercise the fixture under test; they are not the production handoff. Do not run them on a daily-use installation. The exact `omarchy-vm` hostname plus QEMU boundary in production code is an intentional ARM test fixture guard, not a hardware support claim.
+The tests exercise ownership, repair/uninstall preservation, status, DRM admission, display preference safety, compatibility archive validation and updater migration. Production setup can invoke only `/usr/lib/omarchy-gaming-console/engine-manager`, installed separately as a signed Arch package and owned by root. That package pins one exact reviewed commit; no code, URL, digest, repository, or commit from the plugin checkout crosses the privilege boundary. The disposable VM harnesses call the local bootstrap directly because they are already root and must exercise the fixture under test; they are not the production handoff. Do not run them on a daily-use installation. The exact `omarchy-vm` hostname plus QEMU boundary in production code is an intentional ARM test fixture guard, not a hardware support claim.
 
 ## Recorded acceptance
 
