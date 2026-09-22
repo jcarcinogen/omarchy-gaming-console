@@ -12,16 +12,20 @@ from __future__ import annotations
 
 import os
 import re
+import signal
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ORIGIN = "https://github.com/jcarcinogen/omarchy-gaming-console.git"
 REVIEWED_COMMIT = "@REVIEWED_COMMIT@"
 SELF = Path("/usr/lib/omarchy-gaming-console/engine-manager")
+FETCH_TOTAL_SECONDS = 180
+TERMINATE_GRACE_SECONDS = 5
 
 
 def refuse(message: str) -> "None":
@@ -46,7 +50,24 @@ def validate_installation() -> None:
         refuse("engine manager must run from its package-owned path")
 
 
-def git(*args: str, cwd: Path | None = None) -> str:
+def terminate_process_group(process: subprocess.Popen[str]) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        process.communicate(timeout=TERMINATE_GRACE_SECONDS)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.communicate()
+
+
+def git(*args: str, cwd: Path | None = None, timeout_seconds: float) -> str:
     env = {
         "HOME": "/root",
         "LANG": "C.UTF-8",
@@ -55,30 +76,55 @@ def git(*args: str, cwd: Path | None = None) -> str:
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_TERMINAL_PROMPT": "0",
     }
-    result = subprocess.run(
+    process = subprocess.Popen(
         ["/usr/bin/git", "-c", "core.hooksPath=/dev/null", "-c", "protocol.file.allow=never", *args],
         cwd=cwd,
         env=env,
-        check=True,
-        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
+        start_new_session=True,
     )
-    return result.stdout.strip()
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        terminate_process_group(process)
+        refuse("reviewed source fetch exceeded its 180-second total deadline")
+    if process.returncode != 0:
+        raise subprocess.CalledProcessError(
+            process.returncode,
+            process.args,
+            output=stdout,
+            stderr=stderr,
+        )
+    return stdout.strip()
 
 
 def fetch_reviewed_snapshot() -> Path:
     stage = Path(tempfile.mkdtemp(prefix="omarchy-gaming-console-source.", dir="/run"))
-    os.chmod(stage, 0o700)
-    os.chown(stage, 0, 0)
-    git("init", "--quiet", str(stage))
-    git("remote", "add", "origin", ORIGIN, cwd=stage)
-    git("fetch", "--depth", "1", "origin", REVIEWED_COMMIT, cwd=stage)
-    git("checkout", "--quiet", "--detach", "FETCH_HEAD", cwd=stage)
-    head = git("rev-parse", "HEAD", cwd=stage)
-    if head != REVIEWED_COMMIT:
+    deadline = time.monotonic() + FETCH_TOTAL_SECONDS
+    try:
+        os.chmod(stage, 0o700)
+        os.chown(stage, 0, 0)
+
+        def run_git(*args: str, cwd: Path | None = None) -> str:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                refuse("reviewed source fetch exceeded its 180-second total deadline")
+            return git(*args, cwd=cwd, timeout_seconds=remaining)
+
+        run_git("init", "--quiet", str(stage))
+        run_git("remote", "add", "origin", ORIGIN, cwd=stage)
+        run_git("fetch", "--quiet", "--depth", "1", "origin", REVIEWED_COMMIT, cwd=stage)
+        run_git("checkout", "--quiet", "--detach", "FETCH_HEAD", cwd=stage)
+        head = run_git("rev-parse", "HEAD", cwd=stage)
+        if head != REVIEWED_COMMIT:
+            refuse("fetched snapshot does not match the package-pinned commit")
+        return stage
+    except BaseException:
         shutil.rmtree(stage, ignore_errors=True)
-        refuse("fetched snapshot does not match the package-pinned commit")
-    return stage
+        raise
 
 
 def main() -> None:

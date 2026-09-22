@@ -26,12 +26,27 @@ cd "$work"
 
 base=https://github.com/jcarcinogen/omarchy-gaming-console/releases/latest/download
 fresh=$(date +%s%N)
-curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --silent --show-error --location \
-  --output omarchy-gaming-console-engine-any.pkg.tar.zst \
-  "$base/omarchy-gaming-console-engine-any.pkg.tar.zst?fresh=$fresh" \
-  --output omarchy-gaming-console-engine-any.pkg.tar.zst.sig \
-  "$base/omarchy-gaming-console-engine-any.pkg.tar.zst.sig?fresh=$fresh" \
-  --output omarchy-gaming-console-engine-signing-key.asc \
+deadline=$((SECONDS + 600))
+
+download_asset() {
+  local output=$1 max_bytes=$2 url=$3 remaining size
+  remaining=$((deadline - SECONDS))
+  (( remaining > 0 )) || { printf 'Download deadline exceeded. Nothing was installed.\n' >&2; exit 1; }
+  curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --silent --show-error --location \
+    --connect-timeout 30 --max-time "$remaining" --max-filesize "$max_bytes" \
+    --output "$output" "$url"
+  size=$(stat -c %s -- "$output")
+  (( size > 0 && size <= max_bytes )) || {
+    printf 'Downloaded asset exceeded its committed size ceiling. Nothing was installed.\n' >&2
+    exit 1
+  }
+}
+
+download_asset omarchy-gaming-console-engine-any.pkg.tar.zst 1048576 \
+  "$base/omarchy-gaming-console-engine-any.pkg.tar.zst?fresh=$fresh"
+download_asset omarchy-gaming-console-engine-any.pkg.tar.zst.sig 16384 \
+  "$base/omarchy-gaming-console-engine-any.pkg.tar.zst.sig?fresh=$fresh"
+download_asset omarchy-gaming-console-engine-signing-key.asc 65536 \
   "$base/omarchy-gaming-console-engine-signing-key.asc?fresh=$fresh"
 
 fingerprint=$(gpg --show-keys --with-colons omarchy-gaming-console-engine-signing-key.asc | awk -F: '$1 == "fpr" { print $10; exit }')

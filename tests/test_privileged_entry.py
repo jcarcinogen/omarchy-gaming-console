@@ -5,15 +5,31 @@ from __future__ import annotations
 
 import os
 import pathlib
+import runpy
+import signal
 import stat
+import subprocess
 import tempfile
 import unittest
+from typing import Any
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SYSTEM = ROOT / "system"
 
 
 class PrivilegedEntryContract(unittest.TestCase):
+    def load_engine_manager_template(self) -> dict[str, Any]:
+        source = (ROOT / "packaging" / "engine-manager.py.in").read_text()
+        source = source.replace("@REVIEWED_COMMIT@", "a" * 40)
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as handle:
+            handle.write(source)
+            path = pathlib.Path(handle.name)
+        try:
+            return runpy.run_path(str(path))
+        finally:
+            path.unlink()
+
     def test_visible_entry_points_do_not_pkexec_checkout_scripts(self) -> None:
         setup = (ROOT / "setup").read_text()
         uninstall = (ROOT / "uninstall").read_text()
@@ -40,7 +56,7 @@ class PrivilegedEntryContract(unittest.TestCase):
         self.assertIn('REVIEWED_COMMIT = "@REVIEWED_COMMIT@"', template)
         self.assertIn('ORIGIN = "https://github.com/jcarcinogen/omarchy-gaming-console.git"', template)
         self.assertIn("len(REVIEWED_COMMIT) != 40", template)
-        self.assertIn('git("fetch", "--depth", "1", "origin", REVIEWED_COMMIT', template)
+        self.assertIn('run_git("fetch", "--quiet", "--depth", "1", "origin", REVIEWED_COMMIT', template)
         self.assertIn('head != REVIEWED_COMMIT', template)
         self.assertNotIn("ls-remote", template)
         self.assertNotIn("sys.argv[2]", template)
@@ -53,6 +69,38 @@ class PrivilegedEntryContract(unittest.TestCase):
         self.assertIn('reviewed-commit "$pkgdir/usr/share/omarchy-gaming-console/reviewed-commit"', pkgbuild)
         self.assertIn("/usr/lib/omarchy-gaming-console/engine-manager", pkgbuild)
         self.assertIn("/usr/share/polkit-1/actions/org.omarchy.gaming-console.engine.policy", pkgbuild)
+
+    def test_package_helper_terminates_and_reaps_timed_out_git_process_group(self) -> None:
+        namespace = self.load_engine_manager_template()
+        process = mock.Mock(pid=4321, returncode=None)
+        process.communicate.side_effect = [
+            subprocess.TimeoutExpired(["git", "fetch"], 1),
+            ("", ""),
+        ]
+        with mock.patch.object(namespace["subprocess"], "Popen", return_value=process) as popen:
+            with mock.patch.object(namespace["os"], "killpg") as killpg:
+                with self.assertRaises(SystemExit) as raised:
+                    namespace["git"]("fetch", "origin", "a" * 40, timeout_seconds=1)
+        self.assertEqual(78, raised.exception.code)
+        self.assertTrue(popen.call_args.kwargs["start_new_session"])
+        killpg.assert_called_once_with(4321, signal.SIGTERM)
+        self.assertEqual(2, process.communicate.call_count)
+
+    def test_package_helper_removes_root_stage_after_any_git_failure(self) -> None:
+        namespace = self.load_engine_manager_template()
+        with tempfile.TemporaryDirectory() as temporary:
+            stage = pathlib.Path(temporary) / "stage"
+            stage.mkdir()
+            with mock.patch.object(namespace["tempfile"], "mkdtemp", return_value=str(stage)):
+                with mock.patch.object(namespace["os"], "chown"):
+                    with mock.patch.object(namespace["time"], "monotonic", return_value=0.0):
+                        with mock.patch.dict(
+                            namespace["fetch_reviewed_snapshot"].__globals__,
+                            {"git": mock.Mock(side_effect=RuntimeError("fetch failed"))},
+                        ):
+                            with self.assertRaisesRegex(RuntimeError, "fetch failed"):
+                                namespace["fetch_reviewed_snapshot"]()
+            self.assertFalse(stage.exists())
 
     def test_polkit_policy_authorizes_only_the_root_owned_helper(self) -> None:
         policy = (ROOT / "packaging" / "org.omarchy.gaming-console.engine.policy").read_text()

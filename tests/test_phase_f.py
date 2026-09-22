@@ -310,6 +310,16 @@ class PhaseFSourceContracts(unittest.TestCase):
         self.assertIn("fresh=$(date +%s%N)", readme)
         self.assertEqual(3, readme.count('?fresh=$fresh"'))
 
+    def test_readme_one_copy_block_bounds_asset_sizes_and_total_download_time(self) -> None:
+        readme = self.read("README.md")
+        self.assertIn("deadline=$((SECONDS + 600))", readme)
+        self.assertIn('--max-time "$remaining"', readme)
+        self.assertIn('--max-filesize "$max_bytes"', readme)
+        self.assertIn('size=$(stat -c %s -- "$output")', readme)
+        self.assertIn('download_asset omarchy-gaming-console-engine-any.pkg.tar.zst 1048576', readme)
+        self.assertIn('download_asset omarchy-gaming-console-engine-any.pkg.tar.zst.sig 16384', readme)
+        self.assertIn('download_asset omarchy-gaming-console-engine-signing-key.asc 65536', readme)
+
     def test_embedded_environment_contract_requires_two_xwaylands(self) -> None:
         text = CLI.read_text()
         self.assertIn('"/usr/bin/gamescope --steam --mangoapp --xwayland-count 2"', text)
