@@ -14,31 +14,45 @@ Requires an Omarchy 4 Quattro desktop, a supported x86_64 Gamescope/Steam graphi
 
 ### Install the signed engine helper
 
-The privileged lifecycle helper is deliberately **not** installed from the plugin checkout. Download the three fixed-name assets from the [latest engine-helper release](https://github.com/jcarcinogen/omarchy-gaming-console/releases/latest):
-
-- `omarchy-gaming-console-engine-any.pkg.tar.zst`
-- `omarchy-gaming-console-engine-any.pkg.tar.zst.sig`
-- `omarchy-gaming-console-engine-signing-key.asc`
-
-Before any privileged command, verify that the public key fingerprint is exactly:
-
-```text
-5F08 0326 EB45 83CA 063F  9CA5 6E6D F295 2E09 D28D
-```
-
-Then add that verified key to pacman and install the signed package:
+The privileged lifecycle helper is deliberately **not** installed from the plugin checkout. You do not need to download its three release files by hand. Use GitHub’s **Copy** button on the block below, paste the whole block into your terminal once, and press **Enter**. It downloads all three fixed-name assets, checks the signing-key fingerprint and detached signature, and asks for local authorization only when pacman installs the verified package.
 
 ```bash
+bash <<'OGC_ENGINE_INSTALL'
+set -euo pipefail
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+cd "$work"
+
+base=https://github.com/jcarcinogen/omarchy-gaming-console/releases/latest/download
+curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --silent --show-error --location \
+  --output omarchy-gaming-console-engine-any.pkg.tar.zst \
+  "$base/omarchy-gaming-console-engine-any.pkg.tar.zst" \
+  --output omarchy-gaming-console-engine-any.pkg.tar.zst.sig \
+  "$base/omarchy-gaming-console-engine-any.pkg.tar.zst.sig" \
+  --output omarchy-gaming-console-engine-signing-key.asc \
+  "$base/omarchy-gaming-console-engine-signing-key.asc"
+
 fingerprint=$(gpg --show-keys --with-colons omarchy-gaming-console-engine-signing-key.asc | awk -F: '$1 == "fpr" { print $10; exit }')
-[[ $fingerprint == 5F080326EB4583CA063F9CA56E6DF2952E09D28D ]] || { printf 'Signing-key fingerprint mismatch.\n' >&2; exit 1; }
+[[ $fingerprint == 5F080326EB4583CA063F9CA56E6DF2952E09D28D ]] || {
+  printf 'Signing-key fingerprint mismatch. Nothing was installed.\n' >&2
+  exit 1
+}
 gpg --import omarchy-gaming-console-engine-signing-key.asc
 gpg --verify omarchy-gaming-console-engine-any.pkg.tar.zst.sig omarchy-gaming-console-engine-any.pkg.tar.zst
 sudo pacman-key --add omarchy-gaming-console-engine-signing-key.asc
 sudo pacman-key --lsign-key 5F080326EB4583CA063F9CA56E6DF2952E09D28D
 sudo pacman -U ./omarchy-gaming-console-engine-any.pkg.tar.zst
+OGC_ENGINE_INSTALL
 ```
 
-Pacman verifies the detached signature. The package installs the root-owned helper and its narrow polkit policy. The helper itself fixes the one marketplace-reviewed 40-character commit it may fetch and execute; the plugin cannot supply or replace that identity.
+The three fixed-name assets downloaded by that block are:
+
+- `omarchy-gaming-console-engine-any.pkg.tar.zst`
+- `omarchy-gaming-console-engine-any.pkg.tar.zst.sig`
+- `omarchy-gaming-console-engine-signing-key.asc`
+
+The expected signing-key fingerprint is `5F08 0326 EB45 83CA 063F 9CA5 6E6D F295 2E09 D28D`. If either the fingerprint or signature is wrong, the block stops before package installation. Pacman then verifies the same detached signature. The package installs the root-owned helper and its narrow polkit policy. The helper itself fixes the one marketplace-reviewed 40-character commit it may fetch and execute; the plugin cannot supply or replace that identity.
 
 ### Install the front end
 
