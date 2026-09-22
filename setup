@@ -5,14 +5,12 @@ export PATH=/usr/local/bin:/usr/bin:/bin
 
 readonly ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly ENTRY=$ROOT/system/enter-privileged
-readonly COMPAT_MANAGER=$ROOT/bin/omarchy-gaming-console-compatibility-tools
 mode=${1:-install}
 [[ $# -le 1 && ( $mode == install || $mode == repair ) ]] || {
   printf 'Usage: %s [install|repair]\n' "$0" >&2
   exit 64
 }
 [[ -x $ENTRY ]] || { printf 'Missing privileged entry: %s\n' "$ENTRY" >&2; exit 66; }
-[[ -x $COMPAT_MANAGER ]] || { printf 'Missing compatibility-tool manager: %s\n' "$COMPAT_MANAGER" >&2; exit 66; }
 
 is_try_omarchy_vm() {
   [[ $(/usr/bin/systemd-detect-virt 2>/dev/null || true) == qemu ]] &&
@@ -40,13 +38,6 @@ fi
 
 printf 'Authorization runs the reviewed root snapshot. It does not execute this folder as root.\n\n'
 "$ENTRY" "$mode"
-
-# These are user-owned Steam tools, never privileged system objects. Install
-# only from the visible desktop-user entry point; the ARM64 VM has no hardware
-# Steam boundary. This explicit setup action is not an auto-update-on-launch.
-if (( EUID != 0 )) && ! is_try_omarchy_vm; then
-  "$COMPAT_MANAGER" install
-fi
 
 if [[ $mode == install ]]; then
   cat <<'NOTICE'

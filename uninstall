@@ -5,19 +5,11 @@ export PATH=/usr/local/bin:/usr/bin:/bin
 
 readonly ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly ENTRY=$ROOT/system/enter-privileged
-readonly COMPAT_MANAGER=$ROOT/bin/omarchy-gaming-console-compatibility-tools
 [[ $# == 0 ]] || { printf 'Usage: %s\n' "$0" >&2; exit 64; }
 [[ -x $ENTRY ]] || { printf 'Missing privileged entry: %s\n' "$ENTRY" >&2; exit 66; }
-[[ -x $COMPAT_MANAGER ]] || { printf 'Missing compatibility-tool manager: %s\n' "$COMPAT_MANAGER" >&2; exit 66; }
 
 printf 'Omarchy Gaming Console — uninstall system engine\n'
 printf 'This removes only recorded engine-owned objects. It does not run `omarchy plugin remove`.\n\n'
-
-# Remove only unchanged user-owned tools recorded by this project. Selected,
-# modified and pre-existing tools are preserved, and Steam mappings are read-only.
-if (( EUID != 0 )); then
-  "$COMPAT_MANAGER" uninstall
-fi
 
 printf 'Authorization runs the reviewed root snapshot. It does not execute this folder as root.\n\n'
 "$ENTRY" uninstall

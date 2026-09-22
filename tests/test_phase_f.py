@@ -288,6 +288,16 @@ class PhaseFSourceContracts(unittest.TestCase):
         )
         self.assertIn("Copy the single terminal block", result.stdout)
 
+    def test_custom_proton_management_is_not_part_of_ogc(self) -> None:
+        self.assertFalse((ROOT / "bin/omarchy-gaming-console-compatibility-tools").exists())
+        self.assertFalse((ROOT / "tests/test_compatibility_tools.py").exists())
+        combined = "\n".join(
+            self.read(relative)
+            for relative in ("setup", "uninstall", "README.md", "docs/verification.md")
+        )
+        for legacy in ("COMPAT_MANAGER", "Proton-CachyOS", "GE-Proton", "compatibility-tool"):
+            self.assertNotIn(legacy, combined)
+
     def test_readme_one_copy_block_keeps_pacman_confirmation_interactive(self) -> None:
         readme = self.read("README.md")
         self.assertIn(
