@@ -42,7 +42,7 @@ gpg --import omarchy-gaming-console-engine-signing-key.asc
 gpg --verify omarchy-gaming-console-engine-any.pkg.tar.zst.sig omarchy-gaming-console-engine-any.pkg.tar.zst
 sudo pacman-key --add omarchy-gaming-console-engine-signing-key.asc
 sudo pacman-key --lsign-key 5F080326EB4583CA063F9CA56E6DF2952E09D28D
-sudo pacman -U ./omarchy-gaming-console-engine-any.pkg.tar.zst
+sudo pacman -U ./omarchy-gaming-console-engine-any.pkg.tar.zst < /dev/tty
 OGC_ENGINE_INSTALL
 ```
 

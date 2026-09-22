@@ -288,6 +288,13 @@ class PhaseFSourceContracts(unittest.TestCase):
         )
         self.assertIn("Copy the single terminal block", result.stdout)
 
+    def test_readme_one_copy_block_keeps_pacman_confirmation_interactive(self) -> None:
+        readme = self.read("README.md")
+        self.assertIn(
+            "sudo pacman -U ./omarchy-gaming-console-engine-any.pkg.tar.zst < /dev/tty",
+            readme,
+        )
+
     def test_embedded_environment_contract_requires_two_xwaylands(self) -> None:
         text = CLI.read_text()
         self.assertIn('"/usr/bin/gamescope --steam --mangoapp --xwayland-count 2"', text)
