@@ -29,15 +29,23 @@ expected_package_sha256=86b3ed97f7f99841bdbd210f44e8c909285501fefc53187862d7c601
 deadline=$((SECONDS + 600))
 
 download_asset() {
-  local output=$1 max_bytes=$2 url=$3 remaining size
+  local output=$1 max_bytes=$2 url=$3 remaining size transfer_ok=0
   remaining=$((deadline - SECONDS))
   (( remaining > 0 )) || { printf 'Download deadline exceeded. Nothing was installed.\n' >&2; exit 1; }
-  curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --silent --show-error --location \
+  if curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --silent --show-error --location \
     --connect-timeout 30 --max-time "$remaining" --max-filesize "$max_bytes" \
-    --output "$output" "$url"
+    --output - "$url" | head -c "$((max_bytes + 1))" > "$output"; then
+    transfer_ok=1
+  fi
   size=$(stat -c %s -- "$output")
-  (( size > 0 && size <= max_bytes )) || {
+  if (( size > max_bytes )); then
+    rm -f -- "$output"
     printf 'Downloaded asset exceeded its committed size ceiling. Nothing was installed.\n' >&2
+    exit 1
+  fi
+  (( transfer_ok == 1 && size > 0 )) || {
+    rm -f -- "$output"
+    printf 'Asset download failed or was empty. Nothing was installed.\n' >&2
     exit 1
   }
 }
@@ -74,7 +82,7 @@ The three fixed-name assets downloaded by that block are:
 - `omarchy-gaming-console-engine-any.pkg.tar.zst.sig`
 - `omarchy-gaming-console-engine-signing-key.asc`
 
-The block uses the immutable `engine-helper-4297ecf` release and requires package SHA-256 `86b3ed97f7f99841bdbd210f44e8c909285501fefc53187862d7c601dc3dc746`. The expected signing-key fingerprint is `5F08 0326 EB45 83CA 063F 9CA5 6E6D F295 2E09 D28D`. If the checksum, fingerprint, or signature is wrong, the block stops before package installation. Pacman then verifies the same detached signature. The package installs the root-owned helper and its narrow polkit policy. That immutable package fixes reviewed commit `4297ecf6caa9b7449a1a52fedcc3d1383fbdf9c4`; the plugin cannot supply or replace that identity.
+The block uses the immutable `engine-helper-4297ecf` release and requires package SHA-256 `86b3ed97f7f99841bdbd210f44e8c909285501fefc53187862d7c601dc3dc746`. Each response is streamed through a hard byte cap that closes the curl producer as soon as its committed ceiling is crossed, including responses without a usable content length. The expected signing-key fingerprint is `5F08 0326 EB45 83CA 063F 9CA5 6E6D F295 2E09 D28D`. If the checksum, fingerprint, or signature is wrong, the block stops before package installation. Pacman then verifies the same detached signature. The package installs the root-owned helper and its narrow polkit policy. That immutable package fixes reviewed commit `4297ecf6caa9b7449a1a52fedcc3d1383fbdf9c4`; the plugin cannot supply or replace that identity.
 
 ### Install the front end
 
