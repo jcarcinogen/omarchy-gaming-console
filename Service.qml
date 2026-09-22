@@ -83,7 +83,8 @@ Item {
       "setup": [root.cliPath, "setup"],
       "switch": [root.cliPath, "switch"],
       "repair": [root.cliPath, "repair"],
-      "uninstall": [root.cliPath, "uninstall"]
+      "uninstall": [root.cliPath, "uninstall"],
+      "helperInstructions": [root.cliPath, "helper-instructions"]
     }
     if (!fixed[action]) return false
     actionProcess.command = fixed[action]

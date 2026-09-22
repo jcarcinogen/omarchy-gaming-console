@@ -20,6 +20,9 @@ Item {
   readonly property string pluginId: "io.github.jcarcinogen.gaming-console"
   readonly property string statusState: service ? service.statusState : "unsupported"
   readonly property bool ready: statusState === "ready"
+  readonly property bool helperRequired: statusState === "not_installed"
+    && service && service.statusPayload.checks
+    && service.statusPayload.checks.engine_helper === false
   readonly property var statusReasons: service && service.statusPayload.reasons ? service.statusPayload.reasons : []
   readonly property string redundantReadyReason: "The complete system engine is installed and safe."
   readonly property bool hasOnlyRedundantReadyReason:
@@ -148,7 +151,7 @@ Item {
 
           Text {
             width: parent.width
-            text: "Omarchy Gaming Console"
+            text: root.helperRequired ? "Engine Helper Required" : "Omarchy Gaming Console"
             textFormat: Text.PlainText
             color: root.foregroundColor
             font.family: Style.font.family
@@ -160,7 +163,9 @@ Item {
             width: parent.width
             text: root.service && root.service.lastError
               ? root.service.lastError
-              : (root.ready ? "The system engine is installed and safe." : "Setup status: " + root.statusState.replace(/_/g, " "))
+              : (root.helperRequired
+                  ? "One signed prerequisite must be installed before Game Mode setup can begin."
+                  : (root.ready ? "The system engine is installed and safe." : "Setup status: " + root.statusState.replace(/_/g, " ")))
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
             color: root.mutedColor
@@ -170,7 +175,7 @@ Item {
 
           Text {
             width: parent.width
-            visible: root.statusReasons.length > 0 && !root.hasOnlyRedundantReadyReason
+            visible: !root.helperRequired && root.statusReasons.length > 0 && !root.hasOnlyRedundantReadyReason
             text: visible ? root.statusReasons.join("\n") : ""
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
@@ -182,7 +187,32 @@ Item {
           Column {
             width: parent.width
             spacing: Style.space(8)
-            visible: root.statusState === "not_installed" && !root.showChanges
+            visible: root.helperRequired
+
+            Text {
+              width: parent.width
+              text: "The marketplace installs only the unprivileged plugin. The signed engine helper is installed separately so this plugin folder is never trusted as root. The next window gives you the README link and tells you which single block to copy and paste."
+              textFormat: Text.PlainText
+              wrapMode: Text.WordWrap
+              color: root.foregroundColor
+              font.family: Style.font.family
+              font.pixelSize: Style.font.body
+            }
+            ActionButton {
+              label: "Open installation instructions"
+              emphasized: true
+              onTriggered: root.run("helperInstructions")
+            }
+            ActionButton {
+              label: "Cancel"
+              onTriggered: root.dismiss()
+            }
+          }
+
+          Column {
+            width: parent.width
+            spacing: Style.space(8)
+            visible: root.statusState === "not_installed" && !root.helperRequired && !root.showChanges
 
             ActionButton {
               label: "Install Game Mode"
@@ -202,7 +232,7 @@ Item {
           Column {
             width: parent.width
             spacing: Style.space(8)
-            visible: root.statusState === "not_installed" && root.showChanges
+            visible: root.statusState === "not_installed" && !root.helperRequired && root.showChanges
 
             Text {
               width: parent.width

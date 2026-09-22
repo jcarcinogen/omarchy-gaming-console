@@ -138,6 +138,7 @@ class PhaseFStatusTests(unittest.TestCase):
             "gamescope",
             "steam",
             "embedded_env_ok",
+            "engine_helper",
         ):
             self.assertIn(name, checks)
             self.assertIsInstance(checks[name], bool)
@@ -146,6 +147,12 @@ class PhaseFStatusTests(unittest.TestCase):
         payload = self.fixture.status()
         self.assert_schema(payload, "not_installed")
         self.assertFalse(payload["checks"]["console_desktop"])
+        self.assertFalse(payload["checks"]["engine_helper"])
+
+    def test_status_detects_the_package_owned_engine_helper(self) -> None:
+        self.fixture.write("usr/lib/omarchy-gaming-console/engine-manager", "#!/bin/sh\nexit 0\n", 0o755)
+        payload = self.fixture.status()
+        self.assertTrue(payload["checks"]["engine_helper"])
 
     def test_incomplete_when_only_part_of_engine_exists(self) -> None:
         target = self.fixture.path(DESTINATIONS["omarchy-console.desktop"])
@@ -255,7 +262,7 @@ class PhaseFSourceContracts(unittest.TestCase):
         result = subprocess.run([CLI, "arbitrary", "/tmp/x"], check=False, text=True, capture_output=True)
         self.assertEqual(64, result.returncode)
         text = CLI.read_text()
-        for subcommand in ("status", "setup", "switch", "repair", "uninstall"):
+        for subcommand in ("status", "setup", "switch", "repair", "uninstall", "helper-instructions"):
             self.assertIn(subcommand, text)
         namespace = runpy.run_path(str(CLI))
         self.assertEqual(
@@ -264,6 +271,22 @@ class PhaseFSourceContracts(unittest.TestCase):
         )
         self.assertIn("/usr/local/libexec/omarchy-switch-to-console", text)
         self.assertNotIn("shell=True", text)
+
+    def test_helper_instructions_point_to_the_one_copy_readme_step(self) -> None:
+        result = subprocess.run(
+            [CLI, "helper-instructions"],
+            env=os.environ | {"OGC_CLI_TEST_TTY": "1"},
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(0, result.returncode)
+        self.assertIn("Engine Helper Required", result.stdout)
+        self.assertIn(
+            "https://github.com/jcarcinogen/omarchy-gaming-console#first-time-setup",
+            result.stdout,
+        )
+        self.assertIn("Copy the single terminal block", result.stdout)
 
     def test_embedded_environment_contract_requires_two_xwaylands(self) -> None:
         text = CLI.read_text()
@@ -325,8 +348,15 @@ class PhaseFSourceContracts(unittest.TestCase):
             "Check setup",
             "Repair setup",
             "Uninstall Game Mode",
+            "Engine Helper Required",
+            "Open installation instructions",
         ):
             self.assertIn(label, text)
+        self.assertIn('root.run("helperInstructions")', text)
+        self.assertIn('statusPayload.checks.engine_helper === false', text)
+
+        service = self.read("Service.qml")
+        self.assertIn('"helperInstructions": [root.cliPath, "helper-instructions"]', service)
 
     def test_overlay_hides_only_the_redundant_ready_reason(self) -> None:
         text = self.read("Overlay.qml")

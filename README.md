@@ -63,10 +63,11 @@ omarchy plugin add https://github.com/jcarcinogen/omarchy-gaming-console.git --e
 ```
 
 1. Review the plugin trust prompt and choose a bar location (default: **right**).
-2. Click the controller glyph, then **Install Game Mode**. Follow the visible terminal and local authorization prompts. Setup installs missing Gamescope, Steam and MangoHud dependencies through Omarchy's helpers, then asks only the package-owned Console engine manager to install the system engine.
-3. Setup also downloads the pinned Proton-CachyOS SLR and GE-Proton tools for your user. Their **use is optional**, but their acquisition currently runs automatically during hardware setup/repair. Neither is assigned to any game or made the global default. Downloads require network access.
-4. Once status is **ready**, save your work and choose **Switch to Console**. This ends the desktop session; Steam may take a while to appear on first launch. Sign in locally if Steam asks.
-5. To return, use Steam's **Power → Switch to Desktop**. Omarchy remains the normal boot destination.
+2. If the signed helper is not installed yet—as with a marketplace-first install—the controller overlay shows **Engine Helper Required** instead of attempting setup. Click **Open installation instructions**; a visible terminal gives you this README link and tells you to copy the single block above. Install it, then reopen the overlay.
+3. Click **Install Game Mode**. Follow the visible terminal and local authorization prompts. Setup installs missing Gamescope, Steam and MangoHud dependencies through Omarchy's helpers, then asks only the package-owned Console engine manager to install the system engine.
+4. Setup also downloads the pinned Proton-CachyOS SLR and GE-Proton tools for your user. Their **use is optional**, but their acquisition currently runs automatically during hardware setup/repair. Neither is assigned to any game or made the global default. Downloads require network access.
+5. Once status is **ready**, save your work and choose **Switch to Console**. This ends the desktop session; Steam may take a while to appear on first launch. Sign in locally if Steam asks.
+6. To return, use Steam's **Power → Switch to Desktop**. Omarchy remains the normal boot destination.
 
 If setup fails after installing the engine, keep the error output: dependency/compatibility-tool acquisition and engine installation are separate operations, not an all-or-nothing transaction. Use **Repair** after resolving the reported problem rather than assuming setup succeeded.
 

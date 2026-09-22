@@ -19,6 +19,8 @@ SWITCH_WARNING = (
     "Save your work first."
 )
 SWITCH_HELPER = "/usr/local/libexec/omarchy-switch-to-console"
+ENGINE_MANAGER = "/usr/lib/omarchy-gaming-console/engine-manager"
+HELPER_INSTRUCTIONS_URL = "https://github.com/jcarcinogen/omarchy-gaming-console#first-time-setup"
 PAYLOAD = "/run/omarchy-gaming-console/sddm-oneshot.conf"
 RUNTIME_DIR = "/run/omarchy-gaming-console"
 ROUTE = "/etc/sddm.conf.d/zz-omarchy-console-oneshot.conf"
@@ -325,6 +327,7 @@ def status_payload() -> dict[str, Any]:
     state_recorded = safe_directory(rooted(STATE_DIR), 0o700)
     policy_visible = pkaction_visible()
     embedded_ok = embedded_environment_ok()
+    engine_helper = safe_regular(rooted(ENGINE_MANAGER), 0o755)
     dependencies_ok = (gamescope and steam and mangoapp) or dummy
 
     checks: dict[str, bool] = {
@@ -337,6 +340,7 @@ def status_payload() -> dict[str, Any]:
         "steam": steam,
         "mangoapp": mangoapp,
         "embedded_env_ok": embedded_ok,
+        "engine_helper": engine_helper,
         "vm_dummy_boundary": dummy,
         "runtime_boundary_satisfied": dependencies_ok,
         "route_correct": route_ok,
@@ -447,6 +451,26 @@ def run_uninstall() -> int:
     return subprocess.run(command, check=False).returncode
 
 
+def show_helper_instructions() -> int:
+    if not has_terminal():
+        return launch_visible([str(pathlib.Path(__file__).resolve()), "helper-instructions"])
+    print(f"""Engine Helper Required
+
+Before Game Mode can be installed, add its separately signed engine helper:
+
+1. Open this README section:
+   {HELPER_INSTRUCTIONS_URL}
+2. Copy the single terminal block under “Install the signed engine helper”.
+3. Paste it into your terminal and follow the local authorization prompt.
+4. Reopen the controller overlay and click “Install Game Mode”.
+
+The helper is verified before installation. A fingerprint or signature failure
+stops before pacman is run.""")
+    if os.environ.get("OGC_CLI_TEST_TTY") != "1":
+        input("\nPress Enter to close this window.")
+    return 0
+
+
 def run_switch() -> int:
     payload = status_payload()
     if payload["state"] != "ready":
@@ -466,7 +490,7 @@ def run_switch() -> int:
 
 def usage() -> int:
     print(
-        "Usage: omarchy-gaming-console status [--json] | setup | switch | repair | uninstall",
+        "Usage: omarchy-gaming-console status [--json] | setup | switch | repair | uninstall | helper-instructions",
         file=sys.stderr,
     )
     return 64
@@ -491,6 +515,8 @@ def main(argv: list[str]) -> int:
         return run_uninstall()
     if command == "switch":
         return run_switch()
+    if command == "helper-instructions":
+        return show_helper_instructions()
     return usage()
 
 
