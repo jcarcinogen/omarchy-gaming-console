@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Seal a reviewed engine snapshot and run only that root-owned copy.
 
-Root executes this program from memory, via the stock /usr/bin/python3 -c
-argument. It must not be pkexec'd by checkout path. Each payload is read once
-through an O_NOFOLLOW descriptor, checked against the reviewed digest, and
-written into a root-owned /run snapshot. install.sh and uninstall.sh then run
-only from that snapshot.
+Production setup does not execute this file from the plugin directory. The
+root-owned trust fetch clones the pinned GitHub remote, checks that commit,
+and only then executes this copy from that clone. Each payload is read once
+through an O_NOFOLLOW descriptor, checked against its digest, and written into
+a root-owned /run snapshot. install.sh and uninstall.sh then run only from
+that snapshot.
 """
 
 from __future__ import annotations

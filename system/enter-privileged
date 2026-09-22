@@ -1,39 +1,52 @@
 #!/usr/bin/env bash
-# Visible privileged handoff. Root runs stock /usr/bin/python3 with the
-# bootstrap already read through one no-follow descriptor. Root does not open
-# a checkout engine script by path.
+# Visible privileged handoff. Root does not read the plugin directory.
+# Stock curl downloads the verifier from GitHub. Stock git checks that download
+# against GitHub's blob digest. Only the matching root-owned /run copy is run.
 set -euo pipefail
-export PATH=/usr/local/bin:/usr/bin:/bin
+export PATH=/usr/bin:/bin
 
-readonly ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
-readonly BOOTSTRAP=$ROOT/system/privileged-bootstrap.py
 mode=${1:-}
 [[ $# -eq 1 && ( $mode == install || $mode == repair || $mode == uninstall ) ]] || {
   printf 'Usage: %s install|repair|uninstall\n' "$0" >&2
   exit 64
 }
-[[ -f $BOOTSTRAP && ! -L $BOOTSTRAP ]] || {
-  printf 'Missing regular bootstrap: %s\n' "$BOOTSTRAP" >&2
-  exit 66
+command -v /usr/bin/curl >/dev/null 2>&1 || { printf 'Missing /usr/bin/curl.\n' >&2; exit 69; }
+command -v /usr/bin/git >/dev/null 2>&1 || { printf 'Missing /usr/bin/git.\n' >&2; exit 69; }
+
+readonly RAW_URL=https://raw.githubusercontent.com/jcarcinogen/omarchy-gaming-console/main/system/trust-fetch.py
+readonly BLOB_URL='https://api.github.com/repos/jcarcinogen/omarchy-gaming-console/contents/system/trust-fetch.py?ref=main'
+readonly TRUST=/run/omarchy-gaming-console-trust-fetch.py
+readonly BLOB=/run/omarchy-gaming-console-trust-fetch.blob
+
+run() {
+  if (( EUID == 0 )); then
+    "$@"
+  else
+    pkexec "$@"
+  fi
 }
 
-bootstrap_code=$(/usr/bin/python3 -I -c '
-import os, stat, sys
-fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW)
-info = os.fstat(fd)
-if not stat.S_ISREG(info.st_mode):
-    raise SystemExit(66)
-data = os.read(fd, info.st_size + 1)
-again = os.fstat(fd)
-os.close(fd)
-if len(data) != info.st_size or again.st_ino != info.st_ino or again.st_size != info.st_size:
-    raise SystemExit("bootstrap changed while reading")
-sys.stdout.buffer.write(data)
-' "$BOOTSTRAP")
-[[ -n $bootstrap_code ]] || { printf 'Bootstrap read was empty.\n' >&2; exit 66; }
+printf 'Downloading the privileged verifier from GitHub.\n'
+run /usr/bin/curl \
+  --proto '=https' \
+  --proto-redir '=https' \
+  --tlsv1.2 \
+  --fail \
+  --silent \
+  --show-error \
+  --location \
+  --output "$TRUST" \
+  "$RAW_URL" \
+  --output "$BLOB" \
+  "$BLOB_URL"
+run /usr/bin/chmod 644 "$TRUST" "$BLOB"
 
-if (( EUID == 0 )); then
-  /usr/bin/python3 -I -c "$bootstrap_code" "$mode" "$ROOT/system"
-else
-  pkexec /usr/bin/python3 -I -c "$bootstrap_code" "$mode" "$ROOT/system"
-fi
+advertised=$(/usr/bin/awk -F'"' '/"sha":/{print $4; exit}' "$BLOB")
+actual=$(/usr/bin/git hash-object "$TRUST")
+[[ $advertised =~ ^[0-9a-f]{40}$ && $advertised == "$actual" ]] || {
+  printf 'Refusing trust fetch: GitHub blob digest does not match the download.\n' >&2
+  exit 78
+}
+
+printf 'GitHub blob digest matched. Running that verifier.\n'
+run /usr/bin/python3 -I "$TRUST" "$mode"

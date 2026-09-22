@@ -23,11 +23,37 @@ class PrivilegedEntryContract(unittest.TestCase):
             self.assertNotIn("pkexec \"$ROOT/", text)
             self.assertIn("enter-privileged", text)
         entry = (SYSTEM / "enter-privileged").read_text()
-        self.assertIn("pkexec /usr/bin/python3 -I -c", entry)
+        self.assertNotIn("privileged-bootstrap.py", entry)
+        self.assertNotIn("python3 -I -c", entry)
+        self.assertNotIn("O_NOFOLLOW", entry)
         self.assertNotIn("pkexec \"$INSTALLER\"", entry)
         self.assertNotIn("pkexec \"$UNINSTALLER\"", entry)
         self.assertNotIn("install.sh", entry)
         self.assertNotIn("uninstall.sh", entry)
+        self.assertIn("https://raw.githubusercontent.com/jcarcinogen/omarchy-gaming-console/main/system/trust-fetch.py", entry)
+        self.assertIn("https://api.github.com/repos/jcarcinogen/omarchy-gaming-console/contents/system/trust-fetch.py?ref=main", entry)
+        self.assertIn("/run/omarchy-gaming-console-trust-fetch.py", entry)
+        self.assertIn("git hash-object", entry)
+        self.assertLess(entry.index("git hash-object"), entry.index('python3 -I "$TRUST"'))
+
+    def test_trust_fetch_is_authenticated_outside_the_checkout(self) -> None:
+        import importlib.util
+
+        text = (SYSTEM / "trust-fetch.py").read_text()
+        self.assertIn("https://github.com/jcarcinogen/omarchy-gaming-console.git", text)
+        self.assertIn("ls-remote", text)
+        self.assertLess(text.index("ls-remote"), text.index("execv"))
+        self.assertNotIn("EXPECTED", text)
+        spec = importlib.util.spec_from_file_location("trust_fetch", SYSTEM / "trust-fetch.py")
+        if spec is None or spec.loader is None:
+            self.fail("trust-fetch could not be loaded")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertFalse(module.authenticated_copy(str(SYSTEM / "trust-fetch.py"), 0, 0o100644, False))
+        self.assertFalse(module.authenticated_copy(module.AUTHENTICATED_COPY, 1000, 0o100644, False))
+        self.assertFalse(module.authenticated_copy(module.AUTHENTICATED_COPY, 0, 0o100644, True))
+        self.assertFalse(module.authenticated_copy(module.AUTHENTICATED_COPY, 0, 0o100666, False))
+        self.assertTrue(module.authenticated_copy(module.AUTHENTICATED_COPY, 0, 0o100644, False))
 
     def test_engine_scripts_refuse_to_run_outside_a_sealed_stage(self) -> None:
         install = (SYSTEM / "install.sh").read_text()

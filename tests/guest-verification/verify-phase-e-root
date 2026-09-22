@@ -20,6 +20,9 @@ stock_hash=0a4b9feeecd8822b708281d4c1c98f66421cf1769ff79a1a3b4f25af62886641
 autologin_hash=21a546470a478b00a4deb3ab46c4a648bd3ef17cb5a39ec81fc46b746305e67a
 
 say() { printf '%s %s\n' "$(date --iso-8601=seconds)" "$*"; }
+engine_local() {
+  /usr/bin/python3 -I "$source_root/system/privileged-bootstrap.py" "$1" "$source_root/system"
+}
 assert_stock_hashes() {
   printf '%s  %s\n%s  %s\n' "$stock_hash" "$stock" "$autologin_hash" "$autologin" | sha256sum -c -
 }
@@ -82,7 +85,7 @@ owned_digest() {
   sha256sum "$state_file" | awk '{print $1}'
 }
 
-[[ -x $installer && -x $uninstaller && -x $source_root/system/enter-privileged && -f $manifest ]]
+[[ -x $installer && -x $uninstaller && -f $source_root/system/enter-privileged && -f $source_root/system/privileged-bootstrap.py && -f $manifest ]]
 chown -R root:root "$source_root"
 chmod -R go-w "$source_root"
 assert_stock_hashes
@@ -92,7 +95,7 @@ printf 'preserve me too\n' >"$unknown_system"
 chmod 0600 "$unknown_state"
 chmod 0644 "$unknown_system"
 
-"$source_root/system/enter-privileged" install
+engine_local install
 assert_owned
 [[ -f $state_file && $(stat -c '%u:%g:%a' "$state_file") == 0:0:600 ]]
 [[ $(awk -F '\t' '$1=="state_version" {print $2}' "$state_file") == 2 ]]
@@ -107,24 +110,24 @@ pkaction --action-id org.omarchy.gaming-console.switch >/dev/null
 say FIRST_INSTALL_PASS
 
 before=$(owned_digest | sha256sum | awk '{print $1}')
-"$source_root/system/enter-privileged" install
+engine_local install
 after=$(owned_digest | sha256sum | awk '{print $1}')
 [[ $before == "$after" ]]
 assert_owned
 say SECOND_INSTALL_IDEMPOTENT_PASS
 
 rm -f /usr/local/bin/steamos-update
-"$source_root/system/enter-privileged" repair
+engine_local repair
 cmp "$source_root/system/steamos-update" /usr/local/bin/steamos-update
 say REPAIR_MISSING_PASS
 
 rm -f /usr/bin/steamos-polkit-helpers/steamos-update
-"$source_root/system/enter-privileged" repair
+engine_local repair
 cmp "$source_root/system/steamos-update" /usr/bin/steamos-polkit-helpers/steamos-update
 say REPAIR_EXACT_STEAM_PATH_PASS
 
 printf '\nmodified-by-phase-e-test\n' >>/usr/local/bin/steamos-select-branch
-"$source_root/system/enter-privileged" repair
+engine_local repair
 cmp "$source_root/system/steamos-select-branch" /usr/local/bin/steamos-select-branch
 say REPAIR_MODIFIED_PASS
 
@@ -142,7 +145,7 @@ wait_stock
 [[ ! -e $payload && ! -L $payload ]]
 say RESCUE_PASS
 
-"$source_root/system/enter-privileged" uninstall
+engine_local uninstall
 assert_no_owned
 [[ ! -e $state_file && ! -L $state_file ]]
 [[ -f $unknown_state && -f $unknown_system ]]

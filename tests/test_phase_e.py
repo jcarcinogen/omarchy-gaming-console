@@ -134,7 +134,10 @@ class PhaseESourceContracts(unittest.TestCase):
         self.assertIn("plugin remove", uninstall)
         self.assertIn("enter-privileged", setup)
         self.assertIn("enter-privileged", uninstall)
-        self.assertIn("pkexec /usr/bin/python3 -I -c", self.read("system/enter-privileged"))
+        entry = self.read("system/enter-privileged")
+        self.assertNotIn("python3 -I -c", entry)
+        self.assertNotIn("privileged-bootstrap.py", entry)
+        self.assertIn("https://raw.githubusercontent.com/jcarcinogen/omarchy-gaming-console/main/system/trust-fetch.py", entry)
 
     def test_initial_install_warns_that_first_gamescope_steam_launch_can_be_black(self) -> None:
         setup = self.read("setup")
