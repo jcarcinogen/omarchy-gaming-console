@@ -7,7 +7,7 @@ url='https://github.com/jcarcinogen/omarchy-gaming-console'
 license=('MIT')
 depends=('git' 'python' 'polkit')
 source=('engine-manager.py.in' 'org.omarchy.gaming-console.engine.policy')
-sha256sums=('bd6d7a971db14d45a715345369a077527dcacc32ed30166a8099739fe4afcd15'
+sha256sums=('cdd0d993bbcf65fd3719ff594ff34f58d724e2c3190e0e4b7ac4a2b4df84852d'
             '7fe029d719fcd3a605da156b1cca9a3ad931e807fd0560e4c7c08907ce25083d')
 
 prepare() {

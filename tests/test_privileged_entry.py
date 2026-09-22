@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import pathlib
 import runpy
@@ -62,7 +63,9 @@ class PrivilegedEntryContract(unittest.TestCase):
         self.assertNotIn("sys.argv[2]", template)
 
         pkgbuild = (ROOT / "packaging" / "PKGBUILD").read_text()
+        manager_digest = hashlib.sha256((ROOT / "packaging" / "engine-manager.py.in").read_bytes()).hexdigest()
         self.assertIn("pkgname=omarchy-gaming-console-engine", pkgbuild)
+        self.assertIn(f"sha256sums=('{manager_digest}'", pkgbuild)
         self.assertIn("install -Dm755", pkgbuild)
         self.assertNotIn("'SKIP'", pkgbuild)
         self.assertIn('fetch --quiet --depth 1 origin "$REVIEWED_COMMIT"', pkgbuild)
