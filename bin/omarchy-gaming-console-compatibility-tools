@@ -12,9 +12,12 @@ import stat
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.request
 
 SCHEMA = 1
+DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+DOWNLOAD_TOTAL_SECONDS = 30 * 60
 RELEASES = [
     {
         "name": "Proton-CachyOS SLR",
@@ -22,6 +25,7 @@ RELEASES = [
         "archive": "proton-cachyos-11.0-20260703-slr-x86_64.tar.xz",
         "url": "https://github.com/CachyOS/proton-cachyos/releases/download/cachyos-11.0-20260703-slr/proton-cachyos-11.0-20260703-slr-x86_64.tar.xz",
         "sha512": "713fe008d67e3491aef3b5b1d9ae2c112d7c2b58b3f23fc2387d1122fc131ff7e7f0ea27c67bf27973d906bdce6235c34098530ec4c786059438b153c6e16187",
+        "size": 335059640,
         "directory": "proton-cachyos-11.0-20260703-slr-x86_64",
         "tool_id": "proton-cachyos-11.0-20260703-slr-x86_64",
     },
@@ -31,6 +35,7 @@ RELEASES = [
         "archive": "GE-Proton11-7-x86_64.tar.gz",
         "url": "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/GE-Proton11-7/GE-Proton11-7-x86_64.tar.gz",
         "sha512": "7db87e9787e20c35cbdac26018431d5794626b626e4067b050684e45a88cc2ca229d7d263519eafb2e168cde5bef57611065d159d3685aaec152ccb9abe3073f",
+        "size": 563784602,
         "directory": "GE-Proton11-7-x86_64",
         "tool_id": "GE-Proton11-7-x86_64",
     },
@@ -106,15 +111,19 @@ def cache_directory() -> Path:
 def release_records() -> list[dict[str, object]]:
     raw = os.environ.get("OGC_COMPAT_RELEASES_JSON") if os.environ.get("OGC_COMPAT_TESTING") == "1" else None
     records = json.loads(raw) if raw else RELEASES
-    required = {"name", "release", "archive", "url", "sha512", "directory", "tool_id"}
+    required = {"name", "release", "archive", "url", "sha512", "size", "directory", "tool_id"}
     if not isinstance(records, list) or len(records) != 2:
         fail("release metadata must contain exactly two tools")
     for record in records:
         if not isinstance(record, dict) or set(record) != required:
             fail("release metadata is malformed")
-        for value in record.values():
+        for key, value in record.items():
+            if key == "size":
+                continue
             if not isinstance(value, str) or not value:
                 fail("release metadata contains an invalid value")
+        if not isinstance(record["size"], int) or isinstance(record["size"], bool) or record["size"] <= 0:
+            fail("release metadata contains an invalid size")
         if "/" in record["directory"] or "/" in record["archive"]:
             fail("release metadata contains an unsafe path")
         if len(record["sha512"]) != 128 or any(c not in "0123456789abcdef" for c in record["sha512"]):
@@ -173,15 +182,41 @@ def safe_archive_members(archive: Path, expected_top: str) -> list[tarfile.TarIn
 def download(record: dict[str, object], cache: Path) -> Path:
     destination = cache / str(record["archive"])
     expected = str(record["sha512"])
+    expected_size = int(record["size"])
     if destination.is_file() and not destination.is_symlink() and sha512(destination) == expected:
         print(f"Verified cached archive: {destination.name}")
         return destination
     partial = destination.with_name(destination.name + ".part")
     partial.unlink(missing_ok=True)
     print(f"Downloading {record['name']} {record['release']}...")
+    deadline = time.monotonic() + DOWNLOAD_TOTAL_SECONDS
     try:
         with urllib.request.urlopen(str(record["url"]), timeout=60) as response, partial.open("wb") as output:
-            shutil.copyfileobj(response, output, 1024 * 1024)
+            declared_raw = response.headers.get("Content-Length")
+            if declared_raw is not None:
+                try:
+                    declared = int(declared_raw)
+                except (TypeError, ValueError) as error:
+                    raise ValueError("invalid Content-Length") from error
+                if declared < 0 or declared > expected_size:
+                    raise ValueError(
+                        f"declared download size {declared} exceeds committed size {expected_size}"
+                    )
+            received = 0
+            while True:
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"download exceeded {DOWNLOAD_TOTAL_SECONDS} seconds")
+                block = response.read(min(DOWNLOAD_CHUNK_BYTES, expected_size - received + 1))
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"download exceeded {DOWNLOAD_TOTAL_SECONDS} seconds")
+                if not block:
+                    break
+                received += len(block)
+                if received > expected_size:
+                    raise ValueError(f"download exceeded committed size {expected_size}")
+                output.write(block)
+            if received != expected_size:
+                raise ValueError(f"download size {received} does not match committed size {expected_size}")
     except Exception as error:
         partial.unlink(missing_ok=True)
         fail(f"download failed for {record['name']}: {error}")

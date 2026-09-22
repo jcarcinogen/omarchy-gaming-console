@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import hashlib
 import io
 import json
@@ -7,9 +9,25 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
+
+from importlib.machinery import SourceFileLoader
 
 ROOT = Path(__file__).resolve().parents[1]
 MANAGER = ROOT / "bin/omarchy-gaming-console-compatibility-tools"
+manager_module = SourceFileLoader("ogc_compatibility_tools", str(MANAGER)).load_module()
+
+
+class FakeResponse(io.BytesIO):
+    def __init__(self, data: bytes, content_length: int | None = None):
+        super().__init__(data)
+        self.headers = {} if content_length is None else {"Content-Length": str(content_length)}
+        self.bytes_read = 0
+
+    def read(self, size: int | None = -1) -> bytes:
+        data = super().read(-1 if size is None else size)
+        self.bytes_read += len(data)
+        return data
 
 
 class CompatibilityToolTests(unittest.TestCase):
@@ -52,6 +70,7 @@ class CompatibilityToolTests(unittest.TestCase):
                     "archive": archive.name,
                     "url": archive.as_uri(),
                     "sha512": digest,
+                    "size": archive.stat().st_size,
                     "directory": directory_name,
                     "tool_id": tool_id,
                 })
@@ -87,6 +106,57 @@ class CompatibilityToolTests(unittest.TestCase):
                 "state": state,
             }
             return snapshot
+
+    def bounded_record(self, size: int, digest: str) -> dict[str, object]:
+        return {
+            "name": "bounded fixture",
+            "release": "fixture",
+            "archive": "bounded.tar.gz",
+            "url": "https://example.invalid/bounded.tar.gz",
+            "sha512": digest,
+            "size": size,
+            "directory": "bounded",
+            "tool_id": "bounded",
+        }
+
+    def test_download_rejects_oversized_declared_content_length_before_reading(self):
+        response = FakeResponse(b"", content_length=11)
+        record = self.bounded_record(10, hashlib.sha512(b"").hexdigest())
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            manager_module.urllib.request, "urlopen", return_value=response
+        ):
+            with self.assertRaises(SystemExit) as raised:
+                manager_module.download(record, Path(directory))
+            self.assertEqual(raised.exception.code, 78)
+            self.assertEqual(response.bytes_read, 0)
+            self.assertFalse((Path(directory) / "bounded.tar.gz.part").exists())
+
+    def test_download_aborts_when_stream_exceeds_committed_size(self):
+        payload = b"x" * 11
+        response = FakeResponse(payload)
+        record = self.bounded_record(10, hashlib.sha512(payload).hexdigest())
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            manager_module.urllib.request, "urlopen", return_value=response
+        ):
+            with self.assertRaises(SystemExit) as raised:
+                manager_module.download(record, Path(directory))
+            self.assertEqual(raised.exception.code, 78)
+            self.assertFalse((Path(directory) / "bounded.tar.gz.part").exists())
+            self.assertFalse((Path(directory) / "bounded.tar.gz").exists())
+
+    def test_download_enforces_total_transfer_deadline(self):
+        payload = b"data"
+        response = FakeResponse(payload, content_length=len(payload))
+        record = self.bounded_record(len(payload), hashlib.sha512(payload).hexdigest())
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            manager_module.urllib.request, "urlopen", return_value=response
+        ), mock.patch.object(manager_module, "DOWNLOAD_TOTAL_SECONDS", 1), mock.patch.object(
+            manager_module.time, "monotonic", side_effect=[0.0, 0.0, 2.0]
+        ):
+            with self.assertRaises(SystemExit) as raised:
+                manager_module.download(record, Path(directory))
+            self.assertEqual(raised.exception.code, 78)
+            self.assertFalse((Path(directory) / "bounded.tar.gz.part").exists())
 
     def test_visible_setup_and_uninstall_delegate_user_owned_tools_without_root(self):
         setup = (ROOT / "setup").read_text()
