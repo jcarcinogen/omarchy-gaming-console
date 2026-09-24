@@ -6,7 +6,22 @@
 
 Omarchy Gaming Console gives your computer a **Steam Box-like experience**: a TV-friendly, controller-focused interface in a temporary, exclusive Gamescope/Steam session that returns safely to a fresh stock Omarchy desktop. It is **not** merely Steam Big Picture running inside Hyprland: the Console session replaces the desktop compositor for the visit, then gives control back to Omarchy.
 
-![Native Steam display controls showing a manually selected 4K120 mode](preview.png)
+![Omarchy Gaming Console — your desktop, your console: Omarchy alongside a dedicated Gamescope Steam session](preview.png)
+
+## Console experience
+
+Browse your Steam library with a controller in a dedicated Gamescope session.
+
+![Steam library in Console, showing the Favorites grid and controller navigation](examples/steam-library.jpg)
+
+<details>
+<summary>View the Steam navigation menu</summary>
+
+The Steam menu provides access to your library, downloads, settings, and power actions. Use **Power → Switch to Desktop** to return to Omarchy.
+
+![Steam navigation menu with Library, Downloads, Settings, and Power entries](examples/steam-menu.jpg)
+
+</details>
 
 ## First-time setup
 
@@ -136,7 +151,13 @@ omarchy-gaming-console uninstall
 
 Hardware setup installs Arch’s `mangohud` package through the official Omarchy package helper. Its `mangoapp` compositor overlay is launched by Gamescope with `--mangoapp`; Steam’s performance-overlay level controls it. No global `MANGOHUD=1`, library injection, game launch-option edits, or extra 32-bit overlay package is required for this compositor path. Hardware readiness requires `mangoapp`; the ARM VM dummy boundary does not claim an overlay test. Engine uninstall preserves package-managed dependencies such as Steam, Gamescope and MangoHud, and never deletes their package files.
 
+Steam's quick-access performance panel exposes overlay, frame-limit, and scaling controls. The screenshot shows a 120 Hz session; available options depend on your hardware and Gamescope support. Visible HDR and VRR switches are not a claim that this project enables either feature.
+
+![Steam quick-access performance panel showing overlay controls, a 120 FPS frame limit, and scaling options](examples/steam-quick-settings.jpg)
+
 ## Display settings
+
+![Native Steam display controls showing a manually selected 4K120 mode](examples/display-settings.png)
 
 Use Steam's **Settings → Display** in Console. **Automatically Set Resolution** selects the automatic/native mode; turn it off to choose an advertised resolution and refresh rate, then use **Keep** or **Revert**. The confirmation countdown also provides recovery. Automatic mode is not guaranteed to select your display's highest refresh rate.
 
